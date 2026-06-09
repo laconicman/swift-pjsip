@@ -1,0 +1,10 @@
+module PJSIP [system] {
+    umbrella header "PJSIP-umbrella.h"
+    export *
+}
+
+module PJSUA2 [system] {
+    requires cplusplus
+    header "PJSUA2-umbrella.h"
+    export *
+}

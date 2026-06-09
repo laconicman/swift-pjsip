@@ -1,0 +1,5 @@
+# The prebuilt static libraries are committed directly as normal Git blobs (NOT via
+# Git LFS — SwiftPM's package resolution does not run the LFS smudge filter, so an
+# LFS-backed binary would reach consumers as a broken pointer file). Mark them binary
+# so Git skips text/line-ending munging and diffs.
+*.a binary
