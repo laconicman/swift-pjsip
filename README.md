@@ -40,11 +40,11 @@ Or in a `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/laconicman/swift-pjsip", branch: "main")
+    .package(url: "https://github.com/laconicman/swift-pjsip", from: "0.1.0")
 ]
 ```
 
-(Use `branch: "main"` for now; switch to `from: "x.y.z"` once tagged releases exist.)
+(In Xcode choose "Up to Next Major Version" from `0.1.0`, or track `branch: "main"` for the latest.)
 
 For the **C API**:
 
