@@ -32,3 +32,5 @@
 #define PJMEDIA_HAS_INTEL_IPP_CODEC_G729     0
 #define PJMEDIA_HAS_BCG729 1
 
+/* Satisfy legacy infrastructure */
+#define PJMEDIA_RTP_PT_TELEPHONE_EVENTS  101
