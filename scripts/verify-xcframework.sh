@@ -311,7 +311,9 @@ verify_typecheck() {
 verify_slice "ios-arm64" "IOS"
 verify_slice "ios-arm64-simulator" "IOSSIMULATOR"
 verify_headers
-[[ $TYPECHECK -eq 1 ]] && verify_typecheck
+if [[ $TYPECHECK -eq 1 ]]; then
+    verify_typecheck
+fi
 
 echo
 if [[ $FAIL -eq 0 ]]; then
