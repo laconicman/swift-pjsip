@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    name: Verify committed xcframework (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate the package manifest
+        run: swift package dump-package > /dev/null && echo "Package.swift evaluates"
+
+      - name: Verify PJSIP.xcframework matches its promised build parameters
+        run: |
+          ./scripts/verify-xcframework.sh --typecheck Binaries/PJSIP.xcframework
+
+      - name: Shellcheck the build scripts
+        run: |
+          brew list shellcheck >/dev/null 2>&1 || brew install shellcheck
+          shellcheck scripts/*.sh

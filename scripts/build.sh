@@ -568,18 +568,20 @@ phase_dist() {
 
     local zip_path="${OUTPUT_DIR}/PJSIP.xcframework.zip"
     rm -f "${zip_path}"
-    (
-        cd "${OUTPUT_DIR}"
-        zip -ryq "PJSIP.xcframework.zip" "PJSIP.xcframework" \
-            || error_exit "zip failed"
-    )
+    # ditto preserves bundle symlinks/signatures and matches what Xcode/SPM expect;
+    # plain `zip` stores symlink targets unless given -y and can break a signature.
+    ( cd "${OUTPUT_DIR}" && ditto -c -k --keepParent "PJSIP.xcframework" "PJSIP.xcframework.zip" ) \
+        || error_exit "ditto zip failed"
 
+    # `swift package compute-checksum` requires a manifest in CWD, so run it from the
+    # package root (which has Package.swift). The value is just the zip's SHA-256, so a
+    # plain shasum is an exact fallback when no Swift toolchain is present.
     local checksum
     if command -v swift &>/dev/null; then
-        checksum="$(cd "${OUTPUT_DIR}" && swift package compute-checksum "PJSIP.xcframework.zip" 2>/dev/null)" \
+        checksum="$(cd "${REPO_ROOT}" && swift package compute-checksum "${zip_path}" 2>/dev/null)" \
             || checksum="$(sha256_of "${zip_path}")"
     else
-        checksum="$(sha256_of "${zip_path}")"  # identical to swift package compute-checksum (SHA-256)
+        checksum="$(sha256_of "${zip_path}")"
     fi
 
     log_success "Distribution archive: ${zip_path}"

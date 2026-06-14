@@ -215,7 +215,12 @@ verify_headers() {
     local headers="$XCF/ios-arm64/Headers"
     section "── Headers & bundle"
 
-    if grep -qc '<key>LibraryIdentifier</key>' "$XCF/Info.plist" 2>/dev/null; then
+    if [[ -f "$XCF/Info.plist" ]]; then
+        if plutil -lint "$XCF/Info.plist" >/dev/null 2>&1; then
+            pass "Info.plist is valid (plutil -lint)"
+        else
+            fail "Info.plist does not lint"
+        fi
         local slices
         slices="$(grep -c '<key>LibraryIdentifier</key>' "$XCF/Info.plist")"
         if [[ "$slices" -eq 2 ]]; then
@@ -224,7 +229,7 @@ verify_headers() {
             fail "Info.plist declares $slices slices (expected 2)"
         fi
     else
-        fail "Info.plist missing or unreadable"
+        fail "Info.plist missing"
     fi
 
     [[ -d "$headers" ]] || { fail "Headers/ missing in ios-arm64 slice"; return; }
@@ -280,6 +285,29 @@ verify_headers() {
 }
 
 # ---------------------------------------------------------------------------
+# Code signature (Xcode 15+ records the identity on first use and fails the build
+# if a later copy is unsigned / altered / signed by someone else). Unsigned is a
+# warning, not a failure: it is allowed, but consumers see a notice and SDKs on
+# Apple's required-reason list must be signed.
+# ---------------------------------------------------------------------------
+
+verify_signature() {
+    section "── Code signature"
+    if codesign -dv "$XCF" 2>/dev/null; then
+        codesign -dvvv "$XCF" 2>&1 \
+            | grep -E 'Authority|TeamIdentifier|Timestamp' \
+            | sed 's/^/        /' || true
+        if codesign --verify --verbose=2 "$XCF" >/dev/null 2>&1; then
+            pass "code signature verifies"
+        else
+            fail "code signature present but does NOT verify"
+        fi
+    else
+        warn "unsigned — Xcode 15+ warns consumers; sign with: codesign --timestamp -s <identity> $XCF"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Optional: typecheck the modules like a SwiftPM consumer would
 # ---------------------------------------------------------------------------
 
@@ -311,6 +339,7 @@ verify_typecheck() {
 verify_slice "ios-arm64" "IOS"
 verify_slice "ios-arm64-simulator" "IOSSIMULATOR"
 verify_headers
+verify_signature
 if [[ $TYPECHECK -eq 1 ]]; then
     verify_typecheck
 fi
