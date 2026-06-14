@@ -115,9 +115,9 @@ conveniences (e.g. `CustomStringConvertible` conformances) for the imported C ty
 
 ## Required system frameworks / libraries
 
-This is a **static** library, so your **app target** must link the frameworks PJSIP
-depends on (a SwiftPM binary target cannot carry `linkerSettings`, so the package
-cannot force-link them):
+PJSIP is a **static** library, so the frameworks it calls into are resolved when the
+**final executable is linked** — which means the **app target** must link them. A SwiftPM
+binary target cannot carry `linkerSettings`, so the package can't force-link them for you:
 
 - `AVFoundation`, `AudioToolbox`, `CoreAudio`, `CoreVideo`, `VideoToolbox` — audio/video
 - `MetalKit` — video rendering
@@ -125,9 +125,66 @@ cannot force-link them):
 - `Foundation`
 - **C++ standard library (`libc++`)** — required by PJSUA2 (built with `gnu++14` / `libc++`)
 
-VoIP apps typically also add `CallKit` and `PushKit`, but those are app features, not
-PJSIP requirements. If the linker reports a missing symbol, add the framework it
-points to.
+**Linking is not the same as importing.** `import PJSIP` only makes the C declarations
+visible at compile time — it links nothing. The frameworks above are references baked into
+`libpjproject.a`'s object files, and the linker resolves them once, when it produces the
+**app binary**, independent of which Swift module did the `import`. So you link these on the
+**app target**, not on whichever feature module imports PJSIP; a leaf library module that
+`import PJSIP`s but isn't itself the executable links nothing on its own.
+
+Get it wrong and you get a **build-time link error** (`Undefined symbols … _VTCompressionSessionCreate`),
+not a user-facing runtime crash — the linker catches it before you can ship. Conversely,
+listing a framework you don't end up using is harmless: the linker dead-strips PJSIP objects
+nothing references, and an unused `-framework` only adds a load command. VoIP apps typically
+also add `CallKit` and `PushKit`, but those are app features, not PJSIP requirements.
+
+> Prefer not to list these by hand? The "wrapper-package pattern" can force-link them for
+> consumers via a small support target — its mechanics and why this package deliberately
+> stays a single transparent binary target instead are in
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+## Code signing & privacy
+
+**Signing.** The committed `xcframework` is **unsigned**. Xcode 15+ records a binary
+dependency's signing identity the first time it enters a project and *warns* (it does not
+block) if an unsigned or differently-signed copy appears later; `scripts/verify-xcframework.sh`
+reports the status. To sign a rebuild:
+
+```bash
+codesign --timestamp -s "Apple Distribution: <Team> (<TeamID>)" PJSIP.xcframework
+```
+
+A self-signed identity also works for teams outside the Developer Program — share its
+SHA-256 fingerprint out of band so consumers can match what Xcode shows.
+
+**Privacy manifest.** PJSIP is **not** on Apple's
+[list of SDKs that must ship a privacy manifest](https://developer.apple.com/support/third-party-SDK-requirements/),
+and a static-library `xcframework` (a bare `.a`) cannot carry a `PrivacyInfo.xcprivacy`
+anyway — so this package ships none. But PJSIP does call **required-reason APIs** (e.g.
+system boot time via `mach_absolute_time` for its timers), which must be declared in your
+**app's** `PrivacyInfo.xcprivacy`. Illustrative example to adapt — audit it against your own
+build and [Apple's required-reason API list](https://developer.apple.com/documentation/bundleresources/privacy_manifest_files/describing_use_of_required_reason_api);
+it is **not** authoritative and is **not** something this package provides:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSPrivacyAccessedAPITypes</key>
+  <array>
+    <dict>
+      <key>NSPrivacyAccessedAPIType</key>
+      <string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+      <key>NSPrivacyAccessedAPITypeReasons</key>
+      <array>
+        <string>35F9.1</string><!-- measure elapsed time between events within the app -->
+      </array>
+    </dict>
+  </array>
+</dict>
+</plist>
+```
 
 ## ABI / configuration note — do **not** override `config_site.h`
 

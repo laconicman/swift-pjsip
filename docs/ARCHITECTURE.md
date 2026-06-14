@@ -107,12 +107,38 @@ the scripts (`scripts/build.sh`), the inputs (`scripts/config_site.h`), the outp
 (`scripts/verify-xcframework.sh`) that proves the binary matches the promised
 parameters by inspecting its symbol tables and load commands — not the build logs.
 
-### 8. Static library + documented app-side frameworks
+### 8. System frameworks: the deliberately pure binary target
 
-A SwiftPM `binaryTarget` cannot carry `linkerSettings`, so required system
-frameworks (`AVFoundation`, `Network`, `Security`, …) are documented for the app
-target instead of force-linked. A thin wrapper `.target` holding `linkerSettings`
-was considered and rejected to keep the package a single transparent artifact.
+PJSIP's static objects reference Apple frameworks (`AVFoundation`, `AudioToolbox`,
+`CoreAudio`, `CoreVideo`, `VideoToolbox`, `MetalKit`, `Network`, `Security`,
+`libc++`). Because linking happens when the **final executable** is produced, the
+**app target** must link them — and a SwiftPM `binaryTarget` cannot carry
+`linkerSettings`, so the package can't do it for the consumer. (Linking ≠ importing:
+`import PJSIP` only exposes declarations; the linker resolves the framework references
+baked into `libpjproject.a` once, at the app link, regardless of which module imported
+PJSIP. A missing one is a build-time link error, not a runtime crash.)
+
+The sanctioned way to automate it is the **wrapper-package pattern**: keep the binary
+target and add a sibling **source** target — call it `PJSIPSupport` — to the *same*
+product, carrying the frameworks via
+`linkerSettings: [.linkedFramework("VideoToolbox"), …]`. SwiftPM propagates a linked
+target's `linkerSettings` to whatever ultimately links the product, so the app picks
+up `-framework VideoToolbox …` automatically. It is **purely additive**:
+
+- it doesn't touch `import PJSIP` / `import PJSUA2` — those module names come from the
+  binary's module map, not from any SPM target name;
+- it removes nothing and forces nothing on the consumer's *source*;
+- it's harmless to consumers who already link those frameworks — the linker dedups
+  duplicate `-framework` flags and dead-strips unused code.
+
+`PJSIPSupport` would be a one-file stub (it carries settings, not logic), and is also
+where a `PrivacyInfo.xcprivacy` *could* ride if the package ever had to ship one. This
+is how Firebase/RevenueCat/Stripe-style binary packages distribute.
+
+We **deliberately keep the pure binary target** anyway: one transparent artifact, with
+nothing between the consumer and the xcframework. The app links the frameworks (it does
+so regardless), the README documents the list, and the wrapper stays a drop-in upgrade
+if that trade-off ever changes.
 
 ### 9. Code generation as a separate package
 
@@ -124,6 +150,19 @@ and changes per release. That generator lives in
 headers automatically from the consumer's dependency graph. Its own design notes:
 [swift-pjsip-gen/docs/DESIGN.md](https://github.com/laconicman/swift-pjsip-gen/blob/main/docs/DESIGN.md).
 
+### 10. Unsigned, with signing and privacy left to the integrator
+
+The committed artifact is **unsigned**. Xcode 15+ only *warns* on unsigned binary
+dependencies (it records the identity on first use and flags later changes), and an
+open-source artifact anyone can rebuild can't meaningfully share one signing identity —
+so signing is the integrator's call (`codesign --timestamp -s <identity>`;
+`scripts/verify-xcframework.sh` reports status). PJSIP isn't on Apple's
+privacy-manifest SDK list, and a bare-`.a` xcframework can't bundle a
+`PrivacyInfo.xcprivacy` regardless; since PJSIP touches required-reason APIs (system
+boot time), the **consuming app** declares those in its own manifest (the README shows
+an example). Shipping a manifest *inside* the package would need the static-framework
+repackaging or the `PJSIPSupport` target from decision 8.
+
 ## Release flow
 
 ```bash
@@ -134,4 +173,8 @@ git commit && git tag X.Y.Z && git push origin main X.Y.Z
 ```
 
 Tags are fully-qualified semantic versions (`0.2.0`, not `0.2`) — required by
-SwiftPM ranges and the Swift Package Index.
+SwiftPM ranges and the Swift Package Index. For the GitHub Release +
+`.binaryTarget(url:checksum:)` route instead of committing the binary,
+`./scripts/build.sh dist` emits the `ditto`-zipped artifact and its SwiftPM checksum;
+mirror the released version into the xcframework's `Info.plist` so the artifact
+identifies itself.
