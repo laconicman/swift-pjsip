@@ -17,6 +17,7 @@ REPO_ROOT="$(cd "${SCRIPTS_DIR}/.." && pwd)"
 # All build state lives under one disposable directory (gitignored).
 BUILD_ROOT="${PJSIP_BUILD_ROOT:-${REPO_ROOT}/.build-pjsip}"
 META_DIR="${BUILD_ROOT}/meta"
+# shellcheck disable=SC2034  # OUTPUT_DIR is consumed by build.sh after sourcing
 OUTPUT_DIR="${BUILD_ROOT}/output"
 
 # Upstream coordinates.
@@ -451,7 +452,7 @@ sha256_of() {
 clean_target() {
     local target="$1"
     log_info "Cleaning ${target} build artifacts..."
-    rm -rf "${BUILD_ROOT}/${target}" "${BUILD_ROOT}/bcg729-${target}" \
-           "${BUILD_ROOT}/bcg729-source/build-${target}"
+    rm -rf "${BUILD_ROOT:?}/${target}" "${BUILD_ROOT:?}/bcg729-${target}" \
+           "${BUILD_ROOT:?}/bcg729-source/build-${target}"
     log_success "Cleaned ${target}"
 }

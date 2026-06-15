@@ -25,6 +25,9 @@
 # Standalone on purpose: it can verify the committed Binaries/PJSIP.xcframework
 # without any build state. Requires macOS (xcrun, nm, otool, lipo).
 
+# `cond && pass "..." || fail "..."` is the reporting idiom throughout this script;
+# pass/fail never fail, so SC2015's A&&B||C caveat does not apply. Disabled file-wide.
+# shellcheck disable=SC2015
 set -euo pipefail
 
 if [[ -t 1 ]]; then
@@ -182,6 +185,7 @@ verify_slice() {
     else
         warn "VideoToolbox framework reference not found (VTCompressionSessionCreate)"
     fi
+    # shellcheck disable=SC2016  # single quotes intentional: keep $_ literal for grep
     if grep -qxF '_OBJC_CLASS_$_AVCaptureSession' "$TMP/$slice.undefined"; then
         pass "iOS camera backend referenced (AVCaptureSession)"
     else

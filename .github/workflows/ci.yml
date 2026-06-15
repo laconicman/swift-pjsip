@@ -10,7 +10,7 @@ jobs:
     name: Verify committed xcframework (macOS)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Validate the package manifest
         run: swift package dump-package > /dev/null && echo "Package.swift evaluates"

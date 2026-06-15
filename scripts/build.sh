@@ -10,6 +10,7 @@
 # Usage: ./scripts/build.sh [options] <phase> [phase ...]
 # Run with --help for the full phase/option reference.
 
+# shellcheck source=scripts/common.sh disable=SC1091
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 # ---------------------------------------------------------------------------
@@ -123,7 +124,7 @@ build_bcg729() {
     # CMAKE_OSX_SYSROOT takes the SDK *name*; CMake resolves the actual path
     # through xcrun, so nothing here depends on where Xcode is installed.
     (
-        cd "${build_dir}"
+        cd "${build_dir}" || error_exit "cannot enter ${build_dir}"
         cmake .. \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_ARCHITECTURES="${arch}" \
@@ -170,7 +171,7 @@ build_pjsip() {
 
     local configure_log="${META_DIR}/configure-${target}.log"
     (
-        cd "${BUILD_ROOT}/pjproject"
+        cd "${BUILD_ROOT}/pjproject" || error_exit "cannot enter ${BUILD_ROOT}/pjproject"
         find . -name "*.depend" -exec rm {} \; 2>/dev/null || true
 
         log_info "Configuring PJSIP (log: ${configure_log})..."
@@ -193,7 +194,9 @@ build_pjsip() {
         fi
 
         log_info "Building PJSIP (this may take a while)..."
-        make dep && make clean && make || error_exit "PJSIP build failed"
+        if ! { make dep && make clean && make; }; then
+            error_exit "PJSIP build failed"
+        fi
     )
 
     record_build_env "$target"
