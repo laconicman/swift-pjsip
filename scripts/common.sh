@@ -17,7 +17,9 @@ REPO_ROOT="$(cd "${SCRIPTS_DIR}/.." && pwd)"
 # All build state lives under one disposable directory (gitignored).
 BUILD_ROOT="${PJSIP_BUILD_ROOT:-${REPO_ROOT}/.build-pjsip}"
 META_DIR="${BUILD_ROOT}/meta"
-# shellcheck disable=SC2034  # OUTPUT_DIR is consumed by build.sh after sourcing
+# OUTPUT_DIR is read by build.sh after it sources this file; shellcheck analyses
+# common.sh in isolation and can't see that cross-file use, so SC2034 is a false positive.
+# shellcheck disable=SC2034
 OUTPUT_DIR="${BUILD_ROOT}/output"
 
 # Upstream coordinates.
@@ -431,6 +433,8 @@ load_meta() {
     local f
     for f in "${META_DIR}/pjsip-source.env" "${META_DIR}/bcg729-source.env" \
              "${META_DIR}/build-device.env"; do
+        # Variable, build-time-generated path: there's nothing for shellcheck to
+        # follow (SC1090, the dynamic-source variant of SC1091).
         # shellcheck disable=SC1090
         [[ -f "$f" ]] && . "$f"
     done

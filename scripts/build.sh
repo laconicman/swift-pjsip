@@ -10,6 +10,10 @@
 # Usage: ./scripts/build.sh [options] <phase> [phase ...]
 # Run with --help for the full phase/option reference.
 
+# common.sh sits beside this script, but the path is built at runtime, so shellcheck
+# can't statically resolve the include. `source=` points it at the file (so it still
+# checks against it); disable=SC1091 drops the "not following" note without needing
+# CI to pass `-x`.
 # shellcheck source=scripts/common.sh disable=SC1091
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
@@ -175,6 +179,9 @@ build_pjsip() {
         find . -name "*.depend" -exec rm {} \; 2>/dev/null || true
 
         log_info "Configuring PJSIP (log: ${configure_log})..."
+        # EXTRA_CONFIGURE_FLAGS is deliberately unquoted so several flags in it
+        # word-split into separate args; quoting would pass the whole string as one.
+        # (The array and path expansions on this command are already quoted.)
         # shellcheck disable=SC2086
         ./configure-iphone \
             "${CONFIGURE_FLAGS[@]}" \

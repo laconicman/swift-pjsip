@@ -25,9 +25,6 @@
 # Standalone on purpose: it can verify the committed Binaries/PJSIP.xcframework
 # without any build state. Requires macOS (xcrun, nm, otool, lipo).
 
-# `cond && pass "..." || fail "..."` is the reporting idiom throughout this script;
-# pass/fail never fail, so SC2015's A&&B||C caveat does not apply. Disabled file-wide.
-# shellcheck disable=SC2015
 set -euo pipefail
 
 if [[ -t 1 ]]; then
@@ -62,6 +59,11 @@ pass() { PASS=$((PASS + 1)); [[ $QUIET -eq 1 ]] || printf "  ${GREEN}PASS${NC}  
 fail() { FAIL=$((FAIL + 1)); printf "  ${RED}FAIL${NC}  %s\n" "$*"; }
 warn() { WARN=$((WARN + 1)); [[ $QUIET -eq 1 ]] || printf "  ${YELLOW}WARN${NC}  %s\n" "$*"; }
 section() { [[ $QUIET -eq 1 ]] || printf "\n%s\n" "$*"; }
+
+# report PASS_MSG FAIL_MSG CMD...  — run CMD, PASS on success / FAIL on failure.
+# A real branch instead of `CMD && pass || fail`, which SC2015 rightly flags: in
+# that idiom `fail` also runs if `pass` itself fails.
+report() { local p="$1" f="$2"; shift 2; if "$@"; then pass "$p"; else fail "$f"; fi; }
 
 TMP="$(mktemp -d /tmp/pjsip-verify.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
@@ -185,7 +187,10 @@ verify_slice() {
     else
         warn "VideoToolbox framework reference not found (VTCompressionSessionCreate)"
     fi
-    # shellcheck disable=SC2016  # single quotes intentional: keep $_ literal for grep
+    # `_OBJC_CLASS_$_AVCaptureSession` is a literal Mach-O symbol name — the `$` is
+    # part of it. Single quotes keep grep's pattern verbatim, which is the intent, so
+    # SC2016's "no expansion in single quotes" note is a false positive here.
+    # shellcheck disable=SC2016
     if grep -qxF '_OBJC_CLASS_$_AVCaptureSession' "$TMP/$slice.undefined"; then
         pass "iOS camera backend referenced (AVCaptureSession)"
     else
@@ -240,18 +245,22 @@ verify_headers() {
 
     local mm="$headers/module.modulemap"
     if [[ -f "$mm" ]]; then
-        grep -q 'module PJSIP'  "$mm" && pass "module map vends PJSIP"  || fail "module map: PJSIP module missing"
-        grep -q 'module PJSUA2' "$mm" && pass "module map vends PJSUA2" || fail "module map: PJSUA2 module missing"
-        grep -q 'umbrella header' "$mm" && pass "PJSIP uses an umbrella *header* (single-TU, include-order safe)" \
-            || fail "module map: expected 'umbrella header' form"
-        grep -q 'requires cplusplus' "$mm" && pass "PJSUA2 gated behind 'requires cplusplus'" \
-            || warn "PJSUA2 not gated behind 'requires cplusplus'"
+        report "module map vends PJSIP"  "module map: PJSIP module missing"  grep -q 'module PJSIP'  "$mm"
+        report "module map vends PJSUA2" "module map: PJSUA2 module missing" grep -q 'module PJSUA2' "$mm"
+        report "PJSIP uses an umbrella *header* (single-TU, include-order safe)" \
+               "module map: expected 'umbrella header' form" \
+               grep -q 'umbrella header' "$mm"
+        if grep -q 'requires cplusplus' "$mm"; then
+            pass "PJSUA2 gated behind 'requires cplusplus'"
+        else
+            warn "PJSUA2 not gated behind 'requires cplusplus'"
+        fi
     else
         fail "module.modulemap missing"
     fi
 
-    [[ -f "$headers/PJSIP-umbrella.h" ]]  && pass "PJSIP-umbrella.h present"  || fail "PJSIP-umbrella.h missing"
-    [[ -f "$headers/PJSUA2-umbrella.h" ]] && pass "PJSUA2-umbrella.h present" || fail "PJSUA2-umbrella.h missing"
+    report "PJSIP-umbrella.h present"  "PJSIP-umbrella.h missing"  test -f "$headers/PJSIP-umbrella.h"
+    report "PJSUA2-umbrella.h present" "PJSUA2-umbrella.h missing" test -f "$headers/PJSUA2-umbrella.h"
 
     # The macOS case-insensitivity trap: a generated header whose name
     # case-folds onto a vendored one (PJSIP.h vs pjsip.h) silently clobbers it.
@@ -266,18 +275,18 @@ verify_headers() {
     # config_site.h — the ABI contract. Verify the promised constants.
     local cs="$headers/pj/config_site.h"
     if [[ -f "$cs" ]]; then
-        grep -Eq 'define[[:space:]]+PJ_SSL_SOCK_IMP[[:space:]]+PJ_SSL_SOCK_IMP_APPLE' "$cs" \
-            && pass "config_site.h: PJ_SSL_SOCK_IMP_APPLE (native Darwin SSL)" \
-            || fail "config_site.h: PJ_SSL_SOCK_IMP_APPLE not set"
-        grep -Eq 'define[[:space:]]+PJMEDIA_HAS_VIDEO[[:space:]]+1' "$cs" \
-            && pass "config_site.h: PJMEDIA_HAS_VIDEO 1" \
-            || fail "config_site.h: PJMEDIA_HAS_VIDEO not 1"
-        grep -Eq 'define[[:space:]]+PJMEDIA_HAS_BCG729[[:space:]]+1' "$cs" \
-            && pass "config_site.h: PJMEDIA_HAS_BCG729 1" \
-            || fail "config_site.h: PJMEDIA_HAS_BCG729 not 1"
-        grep -Eq 'define[[:space:]]+PJSIP_HAS_TLS_TRANSPORT[[:space:]]+1' "$cs" \
-            && pass "config_site.h: PJSIP_HAS_TLS_TRANSPORT 1" \
-            || fail "config_site.h: PJSIP_HAS_TLS_TRANSPORT not 1"
+        report "config_site.h: PJ_SSL_SOCK_IMP_APPLE (native Darwin SSL)" \
+               "config_site.h: PJ_SSL_SOCK_IMP_APPLE not set" \
+               grep -Eq 'define[[:space:]]+PJ_SSL_SOCK_IMP[[:space:]]+PJ_SSL_SOCK_IMP_APPLE' "$cs"
+        report "config_site.h: PJMEDIA_HAS_VIDEO 1" \
+               "config_site.h: PJMEDIA_HAS_VIDEO not 1" \
+               grep -Eq 'define[[:space:]]+PJMEDIA_HAS_VIDEO[[:space:]]+1' "$cs"
+        report "config_site.h: PJMEDIA_HAS_BCG729 1" \
+               "config_site.h: PJMEDIA_HAS_BCG729 not 1" \
+               grep -Eq 'define[[:space:]]+PJMEDIA_HAS_BCG729[[:space:]]+1' "$cs"
+        report "config_site.h: PJSIP_HAS_TLS_TRANSPORT 1" \
+               "config_site.h: PJSIP_HAS_TLS_TRANSPORT not 1" \
+               grep -Eq 'define[[:space:]]+PJSIP_HAS_TLS_TRANSPORT[[:space:]]+1' "$cs"
         if grep -Eq 'define[[:space:]]+PJSIP_MAX_PKT_LEN' "$cs"; then
             pass "config_site.h: PJSIP_MAX_PKT_LEN = $(grep -E 'define[[:space:]]+PJSIP_MAX_PKT_LEN' "$cs" | awk '{print $3}')"
         else
