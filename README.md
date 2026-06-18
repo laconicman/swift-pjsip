@@ -119,7 +119,9 @@ PJSIP is a **static** library, so the frameworks it calls into are resolved when
 **final executable is linked** — which means the **app target** must link them. A SwiftPM
 binary target cannot carry `linkerSettings`, so the package can't force-link them for you:
 
-- `AVFoundation`, `AudioToolbox`, `CoreAudio`, `CoreVideo`, `VideoToolbox` — audio/video
+- `AVFoundation`, `AudioToolbox`, `CoreAudio`, `CoreMedia`, `CoreVideo`, `VideoToolbox` — audio/video
+  (`CoreMedia` supplies the `CMSampleBuffer` / `CMBlockBuffer` / `CMTime` types the iOS
+  video capture and `VideoToolbox` codec paths use)
 - `MetalKit` — video rendering
 - `Network`, `Security` — transport and Darwin SSL (this build uses `--enable-darwin-ssl`)
 - `Foundation`
