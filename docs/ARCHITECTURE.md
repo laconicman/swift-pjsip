@@ -163,6 +163,72 @@ boot time), the **consuming app** declares those in its own manifest (the README
 an example). Shipping a manifest *inside* the package would need the static-framework
 repackaging or the `PJSIPSupport` target from decision 8.
 
+### 11. Per-slice by necessity — what Apple forces, and what pjproject forces
+
+Two different constraints get conflated when a macOS slice comes up. Worth separating,
+because only one of them is anyone's fault.
+
+**Apple's constraint: a universal iOS+macOS static library cannot exist.** `lipo`
+refuses two slices of the same architecture in one fat file, and
+`arm64-apple-ios` / `arm64-apple-macos` are both `arm64` — they differ only in the
+Mach-O `LC_BUILD_VERSION` platform field. That is precisely why `.xcframework` exists,
+and it means decision 2 above (one combined xcframework) plus one slice per platform is
+not a compromise we settled for; it is the only shape the tooling permits. Chasing a
+single fat `.a` across iOS and macOS is chasing something that cannot be built.
+
+**pjproject's constraint: iOS and macOS are configured by two different mechanisms.**
+Verified against pjproject master `b8b988b02`:
+
+- macOS uses plain `./configure`. Autoconf detects the host — our own builds report
+  `TARGET_NAME := aarch64-apple-darwin25.5.0`, i.e. macOS **arm64** is a first-class,
+  CI-tested configuration.
+- iOS goes through `configure-iphone`, which invokes
+  `./aconfigure --host=<arch>-apple-darwin_ios`. That triple is **fabricated** —
+  `arm64-apple-darwin_ios` is not a real target triple; it exists only so `aconfigure.ac`
+  can pattern-match on it, which it does in ~8 places. Clang has accepted real triples
+  (`arm64-apple-ios15.0`, `-simulator`, `-macabi`) for years.
+
+The consequence that actually bites: **the same feature is enabled two different ways.**
+For the CoreAudio backend, macOS gets `-DPJMEDIA_AUDIO_DEV_HAS_COREAUDIO=1` emitted into
+`os-auto.mak` because `aconfigure.ac`'s `*darwin*` branch sets `ac_pjmedia_snd=coreaudio`;
+the `*-apple-darwin_ios*` branch deliberately does not, so `config_site_sample.h` has to
+hand-`#define` the same macro under `PJ_CONFIG_IPHONE`. Anything upstream ships "for
+Apple" via `PJ_CONFIG_IPHONE` therefore reaches **iOS only**, and a macOS slice silently
+misses it.
+
+**Rule for `scripts/config_site.h`:** set every feature macro we care about explicitly,
+per slice. Do not inherit from upstream defaults and do not assume `PJ_CONFIG_IPHONE`
+covers a Mac. Live example — the VPIO other-audio ducking we contributed upstream
+([pjproject#5178](https://github.com/pjsip/pjproject/pull/5178), merged 2026-08-17) defaults
+to `0` and is switched on by upstream only inside `PJ_CONFIG_IPHONE` — the maintainer confirmed
+leaving macOS on the old behaviour is intentional; a macOS slice that wants it must
+set `PJMEDIA_AUDIO_DEV_COREAUDIO_ADVANCED_DUCKING 1` itself. Because our `config_site.h`
+travels inside the artifact and *is* the ABI (decision 5), that is the right place for it
+anyway.
+
+Other sharp edges in `configure-iphone`, for whoever next touches the build scripts: SDK
+and toolchain are discovered by globbing `/Applications/XCode.app/…/iPhoneOS.platform`
+with a fallback to the pre-2013 `/Developer/…` layout rather than via `xcrun`; the SDK is
+chosen by `ls | sort | tail -1`, which is **lexicographic** (`iPhoneOS9.3` sorts after
+`iPhoneOS10.0`); `RANLIB` is stubbed to `echo ranlib`; and each run configures exactly one
+`-arch`, so multi-arch means multiple configure+make passes.
+
+## Upstream floor — pjproject commits a release must carry
+
+The binary is the only place these land, so the package's real "version" is *which upstream
+commits the artifact was built from*. Any release cut from a source tree older than the commits
+below reintroduces the corresponding defect in every consumer, silently.
+
+| Since | Upstream | Why a release must not predate it |
+|---|---|---|
+| 2026-08 | [#5154](https://github.com/pjsip/pjproject/pull/5154) `77ad3feec` + [#5168](https://github.com/pjsip/pjproject/pull/5168) `716ef557d` | **439 (First Hop Lacks Outbound Support) handling.** `use_rfc5626` is on by default, so on TCP/TLS pjsua emits `;reg-id` + `Supported: outbound` — the exact RFC 5626 §6 439 trigger. Before these commits a 439 was unhandled and left the account **permanently unregistered**, with no retry and no fallback. Symptom in the field: registration fails forever with a status code most people have never seen |
+| 2025-07 | [#5070](https://github.com/pjsip/pjproject/pull/5070) `54ebfdbec` | `pjsua_acc_add` used `PJ_ASSERT_RETURN` for a capacity condition, so **debug builds abort** where release returns `PJ_ETOOMANY` |
+| 2025-08 | [#5076](https://github.com/pjsip/pjproject/pull/5076) | Oversized requests silently fall back to UDP and fragment when the RFC 3261 §18.1.1 TCP upgrade has no TCP transport to acquire — now at least logged |
+
+Record the source commit in `RELEASE-NOTES.md` at build time; a tag alone does not say which
+pjproject tree produced it. The running scan of what has changed upstream since the shipped binary,
+and the bump checklist, live in `swift-pjsua/Upstream/reference-post-2.16-fixes-impact.md`.
+
 ## Release flow
 
 ```bash
