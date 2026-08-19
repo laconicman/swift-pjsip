@@ -3,7 +3,7 @@
 What the **currently committed** `PJSIP.xcframework` does and does not carry, and why it
 matters for downstream apps choosing codecs.
 
-## From the build parameters (`Binaries/RELEASE-NOTES.md`)
+## From the build parameters (the release notes for the pinned version)
 
 configure flags:
 `--disable-gsm-codec --disable-speex-codec --disable-speex-aec --enable-darwin-ssl
@@ -33,7 +33,7 @@ symbol inspection — which limits interop and quality for a general-purpose sof
 Confirmed via `nm` (no `opus_*` / `pjmedia_codec_opus*` symbols in the archive):
 
 ```
-nm -gU Binaries/PJSIP.xcframework/ios-arm64/libpjproject.a 2>/dev/null | grep -i -E 'opus|g7221|ilbc|bcg729'
+nm -gU .build/artifacts/*/PJSIP/PJSIP.xcframework/ios-arm64/libpjproject.a 2>/dev/null | grep -i -E 'opus|g7221|ilbc|bcg729'
 ```
 
 (or extend `scripts/verify-xcframework.sh` with an Opus presence/absence assertion alongside
@@ -50,5 +50,5 @@ obligation beyond what PJSIP already carries.
 > Tooling note: the sibling `pjsip-master 2` build tree in this workspace already carries
 > `opus.sh` and a built `libopus.a`, so wiring Opus into `scripts/build.sh` is low-friction.
 
-- Refs: `Binaries/RELEASE-NOTES.md`; PJSIP media codecs
+- Refs: the release notes for the pinned version; PJSIP media codecs
   <https://docs.pjsip.org/en/latest/>; Opus <https://opus-codec.org/>.

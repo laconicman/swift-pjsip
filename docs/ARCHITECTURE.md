@@ -13,7 +13,7 @@ pjsip/pjproject ────────┐
  branch/local archive)  │   download → deps →               ┌──────────────────────────┐
                         ├─► device + simulator →            │ Package.swift            │
 BelledonneComm/bcg729 ──┘   combine → verify → notes        │   .binaryTarget(PJSIP)   │
-(GitHub or archive)                  │                      │ Binaries/                │
+(GitHub or archive)                  │                      │ (fetched by checksum)    │
                                      ▼                      │   PJSIP.xcframework      │
                             PJSIP.xcframework  ──install──► │   RELEASE-NOTES.md       │
                             + RELEASE-NOTES.md              └────────────┬─────────────┘
@@ -102,8 +102,8 @@ checksum for the `.binaryTarget(url:checksum:)` release-asset alternative.
 
 An auditable binary package needs its provenance next to it: the same repo carries
 the scripts (`scripts/build.sh`), the inputs (`scripts/config_site.h`), the output
-(`Binaries/PJSIP.xcframework`), a machine-generated build report
-(`Binaries/RELEASE-NOTES.md`), and an independent checker
+(the release asset the manifest pins by checksum), a machine-generated build report
+(the release notes, from `build.sh notes`), and an independent checker
 (`scripts/verify-xcframework.sh`) that proves the binary matches the promised
 parameters by inspecting its symbol tables and load commands — not the build logs.
 
@@ -310,7 +310,7 @@ and the bump checklist, live in `swift-pjsua/Upstream/reference-post-2.16-fixes-
 
 ```bash
 ./scripts/build.sh all          # build (interactive source pick or -y for latest)
-./scripts/build.sh install      # stage Binaries/PJSIP.xcframework + RELEASE-NOTES.md
+./scripts/build.sh dist notes   # zip + checksum + release notes
 git diff --stat                 # review
 git commit && git tag X.Y.Z && git push origin main X.Y.Z
 ```

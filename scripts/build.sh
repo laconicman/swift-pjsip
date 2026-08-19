@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # build.sh — build PJSIP (+ bcg729) for iOS and package it as the single
-# combined PJSIP.xcframework that this Swift package ships in Binaries/.
+# combined PJSIP.xcframework this Swift package distributes as a release asset.
 #
 # Follows the official PJSIP build guidance:
 #   - https://docs.pjsip.org/en/latest/get-started/ios/build_instructions.html
@@ -729,8 +729,11 @@ To distribute via a GitHub Release instead of committing the binary:
 EOF
 }
 
-# Copy the built artifact (and release notes) into the package's Binaries/,
-# replacing the committed xcframework. Review `git diff` and commit manually.
+# Stage the built artifact into Binaries/ so a LOCAL path-based build can consume
+# it — how you test an artifact before publishing it. Binaries/ is gitignored: the
+# released package fetches the asset by URL + checksum (docs/Versioning.md), so this
+# is a development convenience, not the release path. To consume a staged artifact,
+# temporarily point Package.swift at `path: "Binaries/PJSIP.xcframework"`.
 phase_install() {
     log_info "=== INSTALL PHASE ==="
     [[ -d "${OUTPUT_DIR}/PJSIP.xcframework" ]] \
@@ -745,8 +748,8 @@ phase_install() {
         log_warn "No RELEASE-NOTES.md in output — run the notes phase to document this build."
     fi
 
-    log_success "Installed into ${REPO_ROOT}/Binaries/"
-    log_info "Next: review 'git status', commit, tag a semantic version, push."
+    log_success "Staged into ${REPO_ROOT}/Binaries/ (gitignored — local testing only)"
+    log_info "To release instead: build.sh dist notes, then tag + 'gh release create' (docs/Versioning.md)."
 }
 
 phase_clean() {

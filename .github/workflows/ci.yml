@@ -7,7 +7,7 @@ on:
 
 jobs:
   verify:
-    name: Verify committed xcframework (macOS)
+    name: Verify the released xcframework (macOS)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
@@ -15,9 +15,23 @@ jobs:
       - name: Validate the package manifest
         run: swift package dump-package > /dev/null && echo "Package.swift evaluates"
 
+      # The artifact is no longer committed (docs/Versioning.md): it is fetched from the
+      # release asset the manifest names. Resolving downloads and CHECKSUM-VERIFIES it, so
+      # this step also proves the published checksum matches the published asset — the one
+      # way this package can break for every consumer at once.
+      - name: Resolve the package (downloads + checksum-verifies the binary target)
+        run: swift package resolve
+
       - name: Verify PJSIP.xcframework matches its promised build parameters
         run: |
-          ./scripts/verify-xcframework.sh --typecheck Binaries/PJSIP.xcframework
+          xcf="$(find .build/artifacts -name 'PJSIP.xcframework' -maxdepth 4 -type d | head -n 1)"
+          if [ -z "$xcf" ]; then
+            echo "No PJSIP.xcframework under .build/artifacts — did resolve fetch the binary target?" >&2
+            find .build/artifacts -maxdepth 4 >&2 || true
+            exit 1
+          fi
+          echo "Verifying $xcf"
+          ./scripts/verify-xcframework.sh --typecheck "$xcf"
 
       - name: Shellcheck the build scripts
         run: |

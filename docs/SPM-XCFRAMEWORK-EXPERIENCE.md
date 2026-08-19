@@ -11,6 +11,46 @@ any prebuilt C/C++ static library shipped via SPM.
 
 ---
 
+> **Superseded in part, 2026-08-19 (package 0.2.0).** The "commit the binary" decision below is
+> no longer what this package does — the artifact is now a **GitHub Release asset** pinned by
+> `.binaryTarget(url:checksum:)`. Everything about *why not Git LFS*, why one combined
+> xcframework, and the module-map constraints still stands and is why the committed form lasted
+> as long as it did. The reasons it changed, and the release procedure, are in
+> [ARCHITECTURE.md](./ARCHITECTURE.md#distribution-a-github-release-asset-not-a-committed-binary)
+> and [Versioning.md](./Versioning.md).
+
+## Measured: what a `url:` binary target costs a consumer that never links it
+
+Question worth settling before adding more slices: a `binaryTarget` is only *linked* into targets
+that depend on it — but does the artifact still **download** for a consumer whose targets never
+touch it? If it does, every consumer of a package that merely *offers* PJSIP pays the transfer.
+
+**What was tried, and what it produced (2026-08-19):**
+
+- A two-package probe — package A declaring the `binaryTarget(url:)` plus an unrelated source
+  product, package B depending on A but with its only target depending on the *source* product —
+  is the right shape for the experiment.
+- Serving the artifact from `http://127.0.0.1:8731` to run it offline **does not work**. SwiftPM
+  rejects the manifest outright:
+
+  ```
+  error: 'dep': invalid URL scheme for binary target 'PJSIP'; valid schemes are: 'https'
+  ```
+
+  A binary target URL must be `https`. That rules out a plain local HTTP server, and rules out
+  hosting artifacts on any http-only endpoint. (It also means this experiment cannot be run
+  against an unpublished artifact — it needs a real https URL.)
+
+**Status: still open.** Re-run the probe against the published `0.2.0` asset. The answer decides
+whether it is safe to keep adding slices (macOS, and later a video/Opus variant) to one artifact,
+or whether the package should eventually split so consumers can take only what they link.
+
+Note the *other* trait question — traits for **slice selection** — is settled and closed: slices
+are chosen automatically from the xcframework's `Info.plist`, and traits cannot change a prebuilt
+binary's contents. This is the different one: traits for **optional dependency resolution**, which
+would raise the tools floor from 5.9 to 6.1 across the whole chain.
+
+
 ## 0. TL;DR decision tree
 
 1. **Multiple interdependent static libs?** → fold into **one** `.a` per slice (`libtool -static`).

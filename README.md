@@ -51,7 +51,7 @@ Swift package. Modules instead of a bridging header. One artifact instead of twe
 - **Capabilities baked in:** video (iOS camera backend + VideoToolbox hardware codec),
   TLS via native Darwin SSL (Security/Network frameworks — no OpenSSL), G.729 (bcg729),
   SRTP, UDP/TCP/TLS transports. GSM and Speex are compiled out.
-- **[`Binaries/RELEASE-NOTES.md`](Binaries/RELEASE-NOTES.md)** documenting what the
+- **the release notes on each [GitHub Release](https://github.com/laconicman/swift-pjsip/releases)** documenting what the
   committed binary was built from and with.
 
 ## Modules
@@ -212,7 +212,7 @@ with Xcode and CMake (`brew install cmake`):
 ```bash
 ./scripts/build.sh all        # interactive: pick PJSIP/bcg729 source (release, tag, branch, archive)
 ./scripts/build.sh -y all     # non-interactive: latest releases, no prompts
-./scripts/build.sh install    # copy the result + RELEASE-NOTES.md into Binaries/
+./scripts/build.sh dist       # zip the result + compute the SwiftPM checksum (release asset)
 ```
 
 Pin sources or customize without prompts:
@@ -234,7 +234,7 @@ Every build is checked against the parameters it was *supposed* to be built with
 by inspecting the binary, not the logs:
 
 ```bash
-./scripts/verify-xcframework.sh Binaries/PJSIP.xcframework              # the committed binary
+./scripts/verify-xcframework.sh .build/artifacts/*/PJSIP/PJSIP.xcframework  # the resolved binary
 ./scripts/verify-xcframework.sh --typecheck .build-pjsip/output/PJSIP.xcframework
 ```
 

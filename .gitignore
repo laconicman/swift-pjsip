@@ -5,3 +5,7 @@
 .swiftpm/
 xcuserdata/
 *.xcodeproj
+
+# The xcframework is distributed as a GitHub Release asset (docs/Versioning.md).
+# `scripts/build.sh install` may stage one here for a local path-based test build.
+Binaries/
