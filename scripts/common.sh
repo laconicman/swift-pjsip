@@ -176,8 +176,12 @@ gh_ref_commit() {
 # A source spec is one of:
 #   latest          — latest GitHub release (falls back to latest tag)
 #   tag=<tag>       — a specific tag, e.g. tag=2.16
-#   branch=<name>   — a branch head, e.g. branch=master
+#   branch=<name>   — a branch head, e.g. branch=master (a MOVING target)
+#   commit=<sha>    — an exact commit, e.g. commit=288de6142044…
 #   archive=<path>  — a local .zip / .tar.gz / .tgz / .tar.bz2
+#
+# Prefer commit= over branch= for anything that gets released: the artifact's
+# real identity is the upstream tree it was built from, and only a SHA pins it.
 #
 # Specs come from (highest precedence first): CLI flag, environment variable
 # (PJSIP_SOURCE / BCG729_SOURCE), interactive prompt, default "latest".
@@ -187,8 +191,8 @@ gh_ref_commit() {
 validate_source_spec() {
     local spec="$1" what="$2"
     case "$spec" in
-        latest|tag=?*|branch=?*|archive=?*) ;;
-        *) error_exit "Invalid ${what} source spec '${spec}'. Use: latest | tag=<tag> | branch=<name> | archive=<path>" ;;
+        latest|tag=?*|branch=?*|commit=?*|archive=?*) ;;
+        *) error_exit "Invalid ${what} source spec '${spec}'. Use: latest | tag=<tag> | branch=<name> | commit=<sha> | archive=<path>" ;;
     esac
 }
 
@@ -202,8 +206,9 @@ prompt_source_spec() {
         echo "Select ${what} source:"
         echo "  1) ${default_desc} (default)"
         echo "  2) Specific tag"
-        echo "  3) Branch (development build)"
-        echo "  4) Local source archive (.zip / .tar.gz)"
+        echo "  3) Branch (development build; moving target)"
+        echo "  4) Exact commit SHA (reproducible; what releases should use)"
+        echo "  5) Local source archive (.zip / .tar.gz)"
         printf "Choice [1]: "
     } > /dev/tty
     read -r choice < /dev/tty || choice=""
@@ -222,6 +227,12 @@ prompt_source_spec() {
             echo "branch=${detail}"
             ;;
         4)
+            printf "Commit SHA: " > /dev/tty
+            read -r detail < /dev/tty
+            [[ -n "$detail" ]] || error_exit "No commit given."
+            echo "commit=${detail}"
+            ;;
+        5)
             printf "Path to archive: " > /dev/tty
             read -r detail < /dev/tty
             [[ -f "$detail" ]] || error_exit "Archive not found: ${detail}"
@@ -295,6 +306,10 @@ fetch_pjsip_source() {
             ref="${spec#branch=}"; kind="branch"
             url="https://github.com/${PJSIP_GH_REPO}/archive/refs/heads/${ref}.zip"
             ;;
+        commit=*)
+            ref="${spec#commit=}"; kind="commit"
+            url="https://github.com/${PJSIP_GH_REPO}/archive/${ref}.zip"
+            ;;
         archive=*)
             ref="$(basename "${spec#archive=}")"; kind="archive"
             url="file://${spec#archive=}"
@@ -315,7 +330,11 @@ fetch_pjsip_source() {
             log_info "Downloading PJSIP ${kind} '${ref}'..."
             fetch_url "$url" "$archive" || error_exit "Failed to download ${url}"
         fi
-        commit="$(gh_ref_commit "${PJSIP_GH_REPO}" "$ref")"
+        if [[ "$kind" == "commit" ]]; then
+            commit="$ref"
+        else
+            commit="$(gh_ref_commit "${PJSIP_GH_REPO}" "$ref")"
+        fi
     fi
 
     log_info "Extracting PJSIP source..."
@@ -423,7 +442,11 @@ record_build_env() {
         echo "CLANG_VERSION=\"${clang_version}\""
         echo "CMAKE_VERSION=\"${cmake_version}\""
         echo "MIN_IOS_VERSION=\"${MIN_IOS_VERSION}\""
-        echo "CONFIGURE_FLAGS=\"${CONFIGURE_FLAGS[*]}\""
+        # Recorded under a DIFFERENT name than the live array: load_meta sources
+        # this file, and `CONFIGURE_FLAGS="a b c"` against an existing array assigns
+        # to element 0 only, leaving elements 1.. in place — which made the notes
+        # print the flag list twice, half of it duplicated.
+        echo "BUILT_CONFIGURE_FLAGS=\"${CONFIGURE_FLAGS[*]}\""
         echo "BASE_LDFLAGS=\"${BASE_LDFLAGS}\""
     } > "${META_DIR}/build-${label}.env"
 }

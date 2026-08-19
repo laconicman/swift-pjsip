@@ -22,7 +22,8 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 # ---------------------------------------------------------------------------
 
 MIN_IOS_VERSION="${MIN_IOS_VERSION:-15.0}"   # keep in sync with Package.swift `.iOS(.v15)`
-CONFIG_SITE="${CONFIG_SITE:-${SCRIPTS_DIR}/config_site.h}"
+CONFIG_SITE="${CONFIG_SITE:-${SCRIPTS_DIR}/config_site-ios.h}"
+PATCHES_DIR="${PATCHES_DIR:-${SCRIPTS_DIR}/patches}"
 NONINTERACTIVE="${NONINTERACTIVE:-0}"
 PJSIP_SOURCE_FLAG=""
 BCG729_SOURCE_FLAG=""
@@ -63,6 +64,49 @@ get_target_sdk() {
 # Source-tree management
 # ---------------------------------------------------------------------------
 
+# Apply every *.patch sitting directly in ${PATCHES_DIR} to the extracted
+# pjproject tree, in sorted order. A patch that will not apply is a HARD
+# FAILURE: the whole point of this step is that a rebuild cannot silently
+# lose a fix that upstream has not taken (see patches/README.md). Sources
+# the patches were forward-ported for are recorded there too.
+#
+# Idempotent: a reverse dry-run that succeeds means the hunk is already in
+# the tree, so re-running a phase over an already-patched tree is a no-op.
+apply_patches() {
+    if [[ ! -d "${PATCHES_DIR}" ]]; then
+        log_info "No patches directory (${PATCHES_DIR}) — building unpatched upstream."
+        return 0
+    fi
+    command -v patch &>/dev/null || error_exit "'patch' not found; required to apply ${PATCHES_DIR}/*.patch"
+
+    local patches=()
+    while IFS= read -r -d '' p; do
+        patches+=("$p")
+    done < <(find "${PATCHES_DIR}" -maxdepth 1 -name '*.patch' -type f -print0 | sort -z)
+
+    if [[ ${#patches[@]} -eq 0 ]]; then
+        log_warn "${PATCHES_DIR} contains no *.patch — building unpatched upstream."
+        return 0
+    fi
+
+    mkdir -p "${META_DIR}"
+    : > "${META_DIR}/patches.txt"
+
+    local p name
+    for p in "${patches[@]}"; do
+        name="$(basename "$p")"
+        if ( cd "${BUILD_ROOT}/pjproject" && patch -p1 -R -f -s --dry-run -i "$p" ) &>/dev/null; then
+            log_info "Patch already applied: ${name}"
+        else
+            log_info "Applying patch: ${name}"
+            ( cd "${BUILD_ROOT}/pjproject" && patch -p1 -f -s -i "$p" ) \
+                || error_exit "Patch ${name} did not apply. The PJSIP source has moved under it — forward-port it (patches/README.md) rather than dropping it."
+        fi
+        echo "${name}  $(sha256_of "$p")" >> "${META_DIR}/patches.txt"
+    done
+    log_success "Applied ${#patches[@]} patch(es) from ${PATCHES_DIR}"
+}
+
 apply_config_site() {
     [[ -f "${CONFIG_SITE}" ]] || error_exit "config_site.h not found: ${CONFIG_SITE}"
     log_info "Applying $(basename "${CONFIG_SITE}") -> pjproject/pjlib/include/pj/config_site.h"
@@ -78,7 +122,7 @@ pjsip_cached_archive_path() {
         archive)
             echo "${PJSIP_SOURCE_SPEC#archive=}"
             ;;
-        release|tag|branch)
+        release|tag|branch|commit)
             local safe_ref
             safe_ref="$(echo "${PJSIP_REF:-}" | tr '/' '-')"
             if [[ -n "$safe_ref" ]]; then
@@ -106,6 +150,7 @@ ensure_pjproject_tree() {
         mv "$top" "${BUILD_ROOT}/pjproject"
         rm -rf "${BUILD_ROOT}/.extract-pjsip"
     fi
+    apply_patches
     apply_config_site
 }
 
@@ -193,12 +238,24 @@ build_pjsip() {
         # Fail fast if configure silently dropped a critical option — the
         # binary checks in verify-xcframework.sh would catch it later, but
         # catching it here saves a long build.
-        if ! grep -q "bcg729 usability... ok" "${configure_log}"; then
-            error_exit "configure did not confirm bcg729 ('bcg729 usability... ok' missing). Check ${configure_log}."
+        #
+        # aconfigure.ac reports this check with AC_MSG_RESULT(yes|no); it has
+        # never printed "ok", in 2.16 or in master. (The earlier guard here
+        # looked for "ok" and so aborted every run — which is why the committed
+        # 2.16 artifact was produced by the older buildPJwVideoPatch scripts and
+        # not by this one.)
+        if ! grep -qE "bcg729 usability\.\.\. (yes|ok)" "${configure_log}"; then
+            error_exit "configure did not confirm bcg729 ('bcg729 usability... yes' missing). Check ${configure_log}."
         fi
-        if grep -qi "darwin ssl.*no\|ssl.*disabled" "${configure_log}"; then
-            log_warn "configure output suggests Darwin SSL may be disabled — check ${configure_log}"
-        fi
+
+        # NOT checked here: TLS. "Checking if SSL support is disabled... yes" in
+        # the log refers to OpenSSL and is EXPECTED — we ship none. Nor does
+        # --enable-darwin-ssl prove anything: AC_ARG_ENABLE(darwin-ssl) acts only
+        # on the "no" case, so passing it SKIPS the autodetect and leaves
+        # PJ_HAS_SSL_SOCK / PJ_SSL_SOCK_IMP undefined in os_auto.h. What actually
+        # selects Apple TLS is config_site's PJ_SSL_SOCK_IMP_APPLE, since every
+        # ssl_sock_*.{c,m} self-gates on that macro. The honest gate is therefore
+        # the symbol check on the built binary in verify-xcframework.sh.
 
         log_info "Building PJSIP (this may take a while)..."
         if ! { make dep && make clean && make; }; then
@@ -261,7 +318,7 @@ phase_download() {
 
     fetch_pjsip_source "$pjsip_spec"
     fetch_bcg729_source "$bcg729_spec"
-    apply_config_site
+    ensure_pjproject_tree   # patches + config_site, same path every build phase takes
 
     log_success "Download phase complete"
 }
@@ -518,9 +575,24 @@ phase_notes() {
         echo
         echo "- Slices: \`ios-arm64\` (device), \`ios-arm64-simulator\`"
         echo "- Minimum iOS: \`${MIN_IOS_VERSION:-unknown}\`"
-        echo "- configure flags: \`${CONFIGURE_FLAGS[*]} --with-bcg729=<bcg729 install>\`"
+        echo "- configure flags: \`${BUILT_CONFIGURE_FLAGS:-${CONFIGURE_FLAGS[*]}} --with-bcg729=<bcg729 install>\`"
         echo "- Extra configure flags: \`${EXTRA_CONFIGURE_FLAGS:-none}\`"
         echo "- LDFLAGS: \`${BASE_LDFLAGS}${EXTRA_LDFLAGS:+ ${EXTRA_LDFLAGS}}\`"
+        echo
+        echo "### Local patches applied to the PJSIP source"
+        echo
+        if [[ -s "${META_DIR}/patches.txt" ]]; then
+            echo "Applied by \`build.sh\` before configure, in this order. Rationale and upstream"
+            echo "status for each: \`scripts/patches/README.md\`."
+            echo
+            echo "| Patch | SHA-256 |"
+            echo "|-------|---------|"
+            while read -r pname psha; do
+                [[ -n "$pname" ]] && echo "| \`${pname}\` | \`${psha}\` |"
+            done < "${META_DIR}/patches.txt"
+        else
+            echo "**None** — built from unmodified upstream source."
+        fi
         echo
         echo "### config_site.h"
         echo
@@ -552,6 +624,19 @@ phase_notes() {
         fi
         if [[ -f "$sim_lib" ]]; then
             echo "| ios-arm64-simulator/libpjproject.a | $(wc -c < "$sim_lib" | tr -d ' ') bytes | \`$(sha256_of "$sim_lib")\` |"
+        fi
+        if [[ -f "${OUTPUT_DIR}/PJSIP.xcframework.zip" ]]; then
+            echo "| PJSIP.xcframework.zip (release asset) | $(wc -c < "${OUTPUT_DIR}/PJSIP.xcframework.zip" | tr -d ' ') bytes | \`$(sha256_of "${OUTPUT_DIR}/PJSIP.xcframework.zip")\` |"
+            echo
+            echo "The zip's SHA-256 **is** the SwiftPM checksum — pin it directly:"
+            echo
+            echo '```swift'
+            echo '.binaryTarget('
+            echo '    name: "PJSIP",'
+            echo "    url: \"https://github.com/laconicman/swift-pjsip/releases/download/<X.Y.Z>/PJSIP.xcframework.zip\","
+            echo "    checksum: \"$(sha256_of "${OUTPUT_DIR}/PJSIP.xcframework.zip")\""
+            echo ')'
+            echo '```'
         fi
         echo
         echo "## Verification"
@@ -680,21 +765,25 @@ Phases:
   all        download deps device simulator combine verify notes
 
 Options:
-  --pjsip-source SPEC    PJSIP source: latest | tag=<tag> | branch=<name> | archive=<path>
+  --pjsip-source SPEC    PJSIP source: latest | tag=<tag> | branch=<name> | commit=<sha> | archive=<path>
   --bcg729-source SPEC   bcg729 source: latest | tag=<tag> | branch=<name> | archive=<path>
   -y, --non-interactive  Never prompt; unspecified sources default to 'latest'
   --min-ios VER          Minimum iOS version (default: ${MIN_IOS_VERSION})
-  --config-site PATH     config_site.h to bake in (default: scripts/config_site.h)
+  --config-site PATH     config_site.h to bake in (default: scripts/config_site-ios.h)
+  --patches DIR          Directory of *.patch to apply (default: scripts/patches;
+                         point elsewhere, or at an empty dir, to build unpatched)
   --build-root DIR       Work directory (default: <repo>/.build-pjsip)
   -h, --help             Show this help
 
 Environment equivalents: PJSIP_SOURCE, BCG729_SOURCE, NONINTERACTIVE=1,
-MIN_IOS_VERSION, CONFIG_SITE, PJSIP_BUILD_ROOT, EXTRA_CONFIGURE_FLAGS, EXTRA_LDFLAGS.
+MIN_IOS_VERSION, CONFIG_SITE, PATCHES_DIR, PJSIP_BUILD_ROOT, EXTRA_CONFIGURE_FLAGS,
+EXTRA_LDFLAGS.
 
 Examples:
   $0 all                                   # interactive source selection, full build
   $0 -y all                                # CI: latest releases, no prompts
   $0 --pjsip-source tag=2.16 all           # build a specific PJSIP release
+  $0 --pjsip-source commit=288de6142 all   # pin an exact upstream tree (releases)
   $0 --pjsip-source archive=~/pjsip.zip \\
      --bcg729-source branch=master all     # mix local archive + branch head
   $0 combine verify notes install          # re-package an existing build
@@ -715,6 +804,8 @@ main() {
             --min-ios=*)       MIN_IOS_VERSION="${1#*=}"; shift ;;
             --config-site)     CONFIG_SITE="${2:?--config-site needs a value}"; shift 2 ;;
             --config-site=*)   CONFIG_SITE="${1#*=}"; shift ;;
+            --patches)         PATCHES_DIR="${2:?--patches needs a value}"; shift 2 ;;
+            --patches=*)       PATCHES_DIR="${1#*=}"; shift ;;
             --build-root)      BUILD_ROOT="${2:?--build-root needs a value}"; shift 2 ;;
             --build-root=*)    BUILD_ROOT="${1#*=}"; shift ;;
             -h|--help)         usage; exit 0 ;;
