@@ -19,37 +19,54 @@ any prebuilt C/C++ static library shipped via SPM.
 > [ARCHITECTURE.md](./ARCHITECTURE.md#distribution-a-github-release-asset-not-a-committed-binary)
 > and [Versioning.md](./Versioning.md).
 
-## Measured: what a `url:` binary target costs a consumer that never links it
+## Measured: a `url:` binary target downloads even for consumers that never link it
 
-Question worth settling before adding more slices: a `binaryTarget` is only *linked* into targets
-that depend on it — but does the artifact still **download** for a consumer whose targets never
-touch it? If it does, every consumer of a package that merely *offers* PJSIP pays the transfer.
+Worth settling before adding more slices: a `binaryTarget` is only *linked* into targets that
+depend on it — but does the artifact still **download** for a consumer whose targets never touch
+it? If so, every consumer of a package that merely *offers* PJSIP pays the transfer.
 
-**What was tried, and what it produced (2026-08-19):**
+**It does.** Measured 2026-08-19 against the published `0.2.0` asset.
 
-- A two-package probe — package A declaring the `binaryTarget(url:)` plus an unrelated source
-  product, package B depending on A but with its only target depending on the *source* product —
-  is the right shape for the experiment.
-- Serving the artifact from `http://127.0.0.1:8731` to run it offline **does not work**. SwiftPM
-  rejects the manifest outright:
+The probe: package `Dep` declares the `binaryTarget(url:)` **and** an unrelated pure-source
+product `Shim`. Package `Consumer` depends on `Dep`, and its only target depends on `Shim` —
+never on `PJSIP`. Then `swift package resolve` in `Consumer`:
 
-  ```
-  error: 'dep': invalid URL scheme for binary target 'PJSIP'; valid schemes are: 'https'
-  ```
+```
+Fetching binary artifact https://…/PJSIP.xcframework-2.17.0-288de6142.zip from cache
+Fetched  …  (1.09s)
 
-  A binary target URL must be `https`. That rules out a plain local HTTP server, and rules out
-  hosting artifacts on any http-only endpoint. (It also means this experiment cannot be run
-  against an unpublished artifact — it needs a real https URL.)
+$ find .build/artifacts -maxdepth 4
+.build/artifacts/dep/PJSIP/PJSIP.xcframework            ← downloaded AND extracted
+.build/artifacts/dep/PJSIP/PJSIP.xcframework/ios-arm64
+.build/artifacts/dep/PJSIP/PJSIP.xcframework/ios-arm64-simulator
+```
 
-**Status: still open.** Re-run the probe against the published `0.2.0` asset. The answer decides
-whether it is safe to keep adding slices (macOS, and later a video/Opus variant) to one artifact,
-or whether the package should eventually split so consumers can take only what they link.
+10.8 MB transferred and ~35 MB extracted for a target that does not reference a single symbol.
+Resolution is per **package graph**, not per linked target; linking is the only thing that is
+target-scoped.
 
-Note the *other* trait question — traits for **slice selection** — is settled and closed: slices
-are chosen automatically from the xcframework's `Info.plist`, and traits cannot change a prebuilt
-binary's contents. This is the different one: traits for **optional dependency resolution**, which
-would raise the tools floor from 5.9 to 6.1 across the whole chain.
+**Consequences, in order of how soon they bite:**
 
+1. **Adding slices taxes every consumer, not just the ones on that platform.** A macOS slice makes
+   the artifact ~50 MB for iOS-only apps too. That is an argument for keeping slice count
+   deliberate, and eventually for splitting artifacts per platform rather than growing one.
+2. **Package traits (SE-0450) are the only mechanism that could gate this**, since they can make a
+   *dependency* conditional. Still unproven for this case, and it costs a tools-floor raise from
+   5.9 to 6.1 across the whole chain — `swift-pjsua` and every app. Not worth it for one artifact;
+   revisit if the artifact set grows.
+3. Do **not** confuse this with traits for *slice selection*, which is settled and closed: slices
+   are picked automatically from the xcframework's `Info.plist`, and no trait can change a
+   prebuilt binary's contents.
+
+**One hard constraint found on the way**, worth its own line because it costs an afternoon
+otherwise: a binary target URL **must be `https`**. Serving the artifact from a local HTTP server
+to run this offline fails at manifest evaluation, not at download:
+
+```
+error: 'dep': invalid URL scheme for binary target 'PJSIP'; valid schemes are: 'https'
+```
+
+So this experiment cannot be run against an unpublished artifact, and no http-only host will do.
 
 ## 0. TL;DR decision tree
 
