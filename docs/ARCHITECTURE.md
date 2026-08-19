@@ -213,6 +213,83 @@ chosen by `ls | sort | tail -1`, which is **lexicographic** (`iPhoneOS9.3` sorts
 `iPhoneOS10.0`); `RANLIB` is stubbed to `echo ranlib`; and each run configures exactly one
 `-arch`, so multi-arch means multiple configure+make passes.
 
+## What is statically inside `libpjproject.a` — and what a host must not link
+
+The artifact is **one static library per slice**, and `combine_merge_libs()` folds *everything*
+into it: every pjproject sublibrary, every third-party dependency pjproject vendors, and bcg729.
+448 object files in the current build. Nothing else has to be linked to make PJSIP work, which is
+the point — but a host that links its own copy of anything below gets duplicate symbols.
+
+Confirmed by inspecting the built archive (`ar t`, `nm -gj`):
+
+| Inside | Evidence | A host linking its own copy |
+|---|---|---|
+| **libsrtp** | `aes.o`, `aes_icm.o`, `srtp_*` (291 symbols) | **Conflicts.** Do not also link libsrtp |
+| **WebRTC AEC/AECM** | `aec_core.o`, `aecm_core_neon.o`, … (429 `webrtc*` symbols) | **Conflicts** with a separate WebRTC build |
+| **bcg729** (G.729, LGPL) | `LP2LSPConversion.c.o`, `LSPQuantization.c.o`, 25 symbols | **Conflicts.** Also the one LGPL component — see below |
+| **iLBC** | `FrameClassify.o`, `StateSearchW.o` | Conflicts |
+| **libyuv** | `yuv_*` | Conflicts |
+| **G.711 / G.722 tables** | `alaw_ulaw_table.o`, `g722*` | Conflicts |
+| **Resample** | `resample*` (30) | Conflicts |
+| **All five `ssl_sock_*` backends** | `ssl_sock_apple.o`, `ssl_sock_ossl.o`, `ssl_sock_darwin.o`, `ssl_sock_gtls.o`, `ssl_sock_mbedtls.o` | Harmless — each self-gates on `PJ_SSL_SOCK_IMP` and only the Apple one has a body |
+
+**Not** inside, deliberately: OpenSSL (TLS is Apple's `Network`/`Security` — the `ssl_sock_ossl.o`
+object is present but compiles to nothing), GSM, Speex, Opus, SDL, ffmpeg, openh264, VPX.
+
+This is the same failure mode that bites TDLibFramework consumers, which statically vendors
+OpenSSL and zlib and breaks the moment the app links its own. The list above exists so nobody has
+to rediscover it from a link error.
+
+**LGPL note.** bcg729 is LGPL-2.1. It is *statically* linked here, which is the arrangement the
+LGPL constrains — an app shipping this artifact takes on the LGPL's relinking obligation for that
+component. Rebuild without it (`--without-bcg729`, and drop `PJMEDIA_HAS_BCG729`) if that is
+unacceptable.
+
+**New in 2.17/master, and worth knowing:** `ai_port.o` and `ai_port_openai.o` — a pjmedia media
+port that streams audio to OpenAI's realtime API. It is compiled in by upstream default and is now
+inside the archive (8 KB, referencing only `pj_http_*`, `pj_json_parse`, `pj_base64_*` which were
+already there). It is inert unless an app calls it, and the linker dead-strips it otherwise, but it
+is a new network-egress surface that did not exist in 2.16. Nothing in this workspace uses it.
+
+## Distribution: a GitHub Release asset, not a committed binary
+
+Through `0.1.2` the xcframework was committed as plain git blobs. It no longer is.
+
+**Why it changed.** The artifact is 34 MB on disk across 678 files; `.git` had reached 19 MB
+holding *one* compressed version of it, and every rebuild added ~15–19 MB of incompressible blobs
+to every clone, permanently. With a per-PJSIP-release cadence and a macOS slice pending (≈50 MB
+artifact), that is a repository that gets worse forever. The zipped asset is 10.8 MB.
+
+**The shape.** `.binaryTarget(url:checksum:)` pointing at a release asset named
+`PJSIP.xcframework-<pjsip-version>-<short-sha>.zip`. `scripts/build.sh dist` produces the zip with
+`ditto` (which preserves the bundle's symlinks and any signature — plain `zip` does not) and
+computes the SwiftPM checksum, which is just the zip's SHA-256.
+
+**Never Git LFS.** SwiftPM's resolver does a plain `git clone` and does **not** run the LFS smudge
+filter, so an LFS-backed binary target hands consumers ~130-byte pointer files and a broken
+xcframework. This is why the binary was committed as ordinary blobs in the first place; the fix is
+to stop committing it, not to LFS it.
+
+**Release procedure** (the full policy, and the version↔PJSIP↔SHA↔patches↔checksum table, are in
+[Versioning.md](./Versioning.md)):
+
+```bash
+./scripts/build.sh -y --pjsip-source commit=<sha> all   # build + verify
+./scripts/build.sh dist notes                           # zip, checksum, release notes
+git commit && git tag X.Y.Z && git push origin main X.Y.Z
+gh release create X.Y.Z --notes-file .build-pjsip/output/RELEASE-NOTES.md \
+    .build-pjsip/output/PJSIP.xcframework-<ver>-<sha>.zip
+```
+
+Order matters: the tag's `Package.swift` names the asset URL and checksum, so the tag is briefly
+unresolvable between `push` and `gh release create`. Zip **once** — `ditto` records timestamps, so
+a re-zip has a different checksum than the one in the manifest.
+
+**One thing to know about the cost model, verified rather than assumed:** a `binaryTarget` is only
+*linked* into targets that depend on it, but the package dependency still **resolves and downloads
+for the whole graph** — a consumer that uses none of it still pays the download. See
+[SPM-XCFRAMEWORK-EXPERIENCE.md](./SPM-XCFRAMEWORK-EXPERIENCE.md) for what was measured.
+
 ## Upstream floor — pjproject commits a release must carry
 
 The binary is the only place these land, so the package's real "version" is *which upstream

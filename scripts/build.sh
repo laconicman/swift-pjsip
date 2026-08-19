@@ -625,16 +625,19 @@ phase_notes() {
         if [[ -f "$sim_lib" ]]; then
             echo "| ios-arm64-simulator/libpjproject.a | $(wc -c < "$sim_lib" | tr -d ' ') bytes | \`$(sha256_of "$sim_lib")\` |"
         fi
-        if [[ -f "${OUTPUT_DIR}/PJSIP.xcframework.zip" ]]; then
-            echo "| PJSIP.xcframework.zip (release asset) | $(wc -c < "${OUTPUT_DIR}/PJSIP.xcframework.zip" | tr -d ' ') bytes | \`$(sha256_of "${OUTPUT_DIR}/PJSIP.xcframework.zip")\` |"
+        local zip_name zip_path
+        zip_name="$(dist_zip_name)"
+        zip_path="${OUTPUT_DIR}/${zip_name}"
+        if [[ -f "${zip_path}" ]]; then
+            echo "| ${zip_name} (release asset) | $(wc -c < "${zip_path}" | tr -d ' ') bytes | \`$(sha256_of "${zip_path}")\` |"
             echo
             echo "The zip's SHA-256 **is** the SwiftPM checksum — pin it directly:"
             echo
             echo '```swift'
             echo '.binaryTarget('
             echo '    name: "PJSIP",'
-            echo "    url: \"https://github.com/laconicman/swift-pjsip/releases/download/<X.Y.Z>/PJSIP.xcframework.zip\","
-            echo "    checksum: \"$(sha256_of "${OUTPUT_DIR}/PJSIP.xcframework.zip")\""
+            echo "    url: \"https://github.com/laconicman/swift-pjsip/releases/download/<X.Y.Z>/${zip_name}\","
+            echo "    checksum: \"$(sha256_of "${zip_path}")\""
             echo ')'
             echo '```'
         fi
@@ -656,16 +659,45 @@ phase_notes() {
 # `.binaryTarget(url:checksum:)` from a GitHub Release instead of committing
 # the binary. (Never use Git LFS for SPM binaries — consumers receive pointer
 # files; see docs/SPM-XCFRAMEWORK-EXPERIENCE.md.)
+# Name of the release asset: PJSIP.xcframework-<pjsip-version>-<short-sha>.zip.
+# Both halves are derived from the build itself — the version from the built
+# headers, the SHA from recorded source metadata — so the name cannot drift from
+# the contents. Falls back to the bare name when either is unavailable.
+# Rationale: docs/Versioning.md "Artifact naming".
+dist_zip_name() {
+    local hdr="${OUTPUT_DIR}/PJSIP.xcframework/ios-arm64/Headers/pj/config.h"
+    local ver="" sha=""
+    if [[ -f "$hdr" ]]; then
+        local maj min rev
+        maj="$(awk '/^#define PJ_VERSION_NUM_MAJOR/ {print $3; exit}' "$hdr")"
+        min="$(awk '/^#define PJ_VERSION_NUM_MINOR/ {print $3; exit}' "$hdr")"
+        rev="$(awk '/^#define PJ_VERSION_NUM_REV/   {print $3; exit}' "$hdr")"
+        [[ -n "$maj" && -n "$min" && -n "$rev" ]] && ver="${maj}.${min}.${rev}"
+    fi
+    load_meta
+    sha="$(echo "${PJSIP_COMMIT:-}" | cut -c1-9)"
+
+    if [[ -n "$ver" && -n "$sha" ]]; then
+        echo "PJSIP.xcframework-${ver}-${sha}.zip"
+    elif [[ -n "$ver" ]]; then
+        echo "PJSIP.xcframework-${ver}.zip"
+    else
+        echo "PJSIP.xcframework.zip"
+    fi
+}
+
 phase_dist() {
     log_info "=== DIST PHASE (zip + checksum) ==="
     [[ -d "${OUTPUT_DIR}/PJSIP.xcframework" ]] \
         || error_exit "${OUTPUT_DIR}/PJSIP.xcframework not found. Run the combine phase first."
 
-    local zip_path="${OUTPUT_DIR}/PJSIP.xcframework.zip"
+    local zip_name zip_path
+    zip_name="$(dist_zip_name)"
+    zip_path="${OUTPUT_DIR}/${zip_name}"
     rm -f "${zip_path}"
     # ditto preserves bundle symlinks/signatures and matches what Xcode/SPM expect;
     # plain `zip` stores symlink targets unless given -y and can break a signature.
-    ( cd "${OUTPUT_DIR}" && ditto -c -k --keepParent "PJSIP.xcframework" "PJSIP.xcframework.zip" ) \
+    ( cd "${OUTPUT_DIR}" && ditto -c -k --keepParent "PJSIP.xcframework" "${zip_name}" ) \
         || error_exit "ditto zip failed"
 
     # `swift package compute-checksum` requires a manifest in CWD, so run it from the
@@ -690,7 +722,7 @@ To distribute via a GitHub Release instead of committing the binary:
 
      .binaryTarget(
          name: "PJSIP",
-         url: "https://github.com/laconicman/swift-pjsip/releases/download/<X.Y.Z>/PJSIP.xcframework.zip",
+         url: "https://github.com/laconicman/swift-pjsip/releases/download/<X.Y.Z>/${zip_name}",
          checksum: "${checksum}"
      )
 
