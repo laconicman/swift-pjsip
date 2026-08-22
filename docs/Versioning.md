@@ -64,8 +64,13 @@ from the contents.
 **The zip is not byte-reproducible.** `ditto -c -k` records timestamps, so re-zipping the same
 xcframework yields a different SHA-256. Zip **once** per release, publish *that* file, and record
 *that* checksum here — never recompute it from a fresh zip after the asset is uploaded, or the
-manifest will reject the download. (What *is* reproducible is the `.a` inside: the per-slice
-`libpjproject.a` checksums in the generated notes are the ones to compare across builds.)
+manifest will reject the download.
+
+Neither is the merged `libpjproject.a`, measured while cutting `0.2.1`: `xcrun libtool -static`
+stamps fresh archive metadata, so re-running `combine` over untouched object files produces a
+different `.a` SHA-256. What *is* reproducible is one level down — the archive **members**. To
+prove a respin did not change the code, extract both archives and compare member checksums
+(`0.2.1` vs the withdrawn `0.2.0`: 428/428 identical per slice), not the `.a` digest.
 
 ### Checksums are published, not just computed
 
@@ -79,7 +84,8 @@ One row per release. `Patches` lists what `scripts/patches/` applied at build ti
 
 | Package | PJSIP | Upstream SHA | Patches | Artifact SHA-256 (SwiftPM checksum) | Notes |
 |---|---|---|---|---|---|
-| `0.2.0` | 2.17.0 (master, post-2.17) | [`288de6142`](https://github.com/pjsip/pjproject/commit/288de6142044483944a60015c17afd32b6166bb6) | `iphone17-darwin-dev-stride` | `00214082e4b246bf224f6a2dd3ca8a064e755bb8205962194518377a7349526b` | First release built by `scripts/build.sh`. Distribution moved to a release asset. `config_site` split per slice; `PJSIP_DONT_SWITCH_TO_TCP` dropped; ACC/CALLS/CONF_PORTS raised |
+| `0.2.1` | 2.17.0 (master, post-2.17) | [`288de6142`](https://github.com/pjsip/pjproject/commit/288de6142044483944a60015c17afd32b6166bb6) | `iphone17-darwin-dev-stride` | `36f49d1abc62010184439e8d56a45c292307ed5321bff47a983cd1390c282dda` | **Replaces the withdrawn `0.2.0`.** Module map gains `textual header` for the two config headers — without it the clang module dropped `config_site.h`'s overrides and Swift imported the `PJ_CONFIG_IPHONE` preset's values instead of the binary's (ARCHITECTURE.md decision 4). Capacity block now hands `PJSUA_MAX_ACC` / `PJSUA_MAX_CONF_PORTS` back to upstream's defaults with a bare `#undef`. Headers-only respin: 428/428 archive members identical to `0.2.0` per slice |
+| ~~`0.2.0`~~ **withdrawn** | 2.17.0 (master, post-2.17) | [`288de6142`](https://github.com/pjsip/pjproject/commit/288de6142044483944a60015c17afd32b6166bb6) | `iphone17-darwin-dev-stride` | `00214082e4b246bf224f6a2dd3ca8a064e755bb8205962194518377a7349526b` | **Deleted 2026-08-22** — shipped a module map that made every Swift consumer compile `PJSUA_MAX_ACC` 4 / `PJSUA_MAX_CALLS` 4 / `PJSUA_MAX_CONF_PORTS` 12 against a binary built with 8 / 8 / 254, and with them a `pjsua_conf_port_info` 968 bytes shorter than the library writes. Superseded by `0.2.1`; asset and tag removed so nothing can resolve it |
 | `0.1.2` | 2.16.0 | *not recorded* | "iPhone 17 device patch" (unversioned; recovered 2026-08-19 as `historical/2.16-…`) | *not recorded* | Built by the older `buildPJwVideoPatch` scripts, not by `scripts/build.sh` |
 | `0.1.1` | 2.16.0 | *not recorded* | as above | *not recorded* | |
 | `0.1.0` | 2.16.0 | *not recorded* | as above | *not recorded* | Initial |

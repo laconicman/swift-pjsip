@@ -11,7 +11,8 @@ any prebuilt C/C++ static library shipped via SPM.
 
 ---
 
-> **Superseded in part, 2026-08-19 (package 0.2.0).** The "commit the binary" decision below is
+> **Superseded in part, 2026-08-19 (package 0.2.0, since withdrawn — the shape it introduced
+> ships in 0.2.1).** The "commit the binary" decision below is
 > no longer what this package does — the artifact is now a **GitHub Release asset** pinned by
 > `.binaryTarget(url:checksum:)`. Everything about *why not Git LFS*, why one combined
 > xcframework, and the module-map constraints still stands and is why the committed form lasted
@@ -25,7 +26,8 @@ Worth settling before adding more slices: a `binaryTarget` is only *linked* into
 depend on it — but does the artifact still **download** for a consumer whose targets never touch
 it? If so, every consumer of a package that merely *offers* PJSIP pays the transfer.
 
-**It does.** Measured 2026-08-19 against the published `0.2.0` asset.
+**It does.** Measured 2026-08-19 against the then-published `0.2.0` asset (withdrawn since; `0.2.1`
+is the same asset shape, so the measurement stands).
 
 The probe: package `Dep` declares the `binaryTarget(url:)` **and** an unrelated pure-source
 product `Shim`. Package `Consumer` depends on `Dep`, and its only target depends on `Shim` —
