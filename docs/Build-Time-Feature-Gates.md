@@ -17,11 +17,30 @@ call-lifecycle passes (`../../swift-pjsua/docs/Call-Termination-Paths.md`,
 
 ## What we currently set
 
-`scripts/config_site.h` starts from `PJ_CONFIG_IPHONE` + `config_site_sample.h` and sets: video on
-(`PJMEDIA_HAS_VIDEO`, iOS video device, VideoToolbox codec), UDP/TCP/TLS transports with
-`PJ_SSL_SOCK_IMP_APPLE` (deliberately, not the deprecated Darwin/SecureTransport backend —
-`../../offhook/docs/Prior-Art.md` §1.2), `PJSIP_MAX_PKT_LEN 16000`, `PJSIP_DONT_SWITCH_TO_TCP 1`,
-BCG729, and `PJMEDIA_RTP_PT_TELEPHONE_EVENTS 101`.
+`scripts/config_site-ios.h` starts from `PJ_CONFIG_IPHONE` + `config_site_sample.h` and sets: video
+on (`PJMEDIA_HAS_VIDEO`, iOS video device, VideoToolbox codec), UDP/TCP/TLS transports with
+`PJ_SSL_SOCK_IMP_APPLE` (deliberately, not the deprecated Darwin/SecureTransport backend), BCG729,
+`PJMEDIA_RTP_PT_TELEPHONE_EVENTS 101`, CoreAudio advanced ducking, and `PJSIP_MAX_PKT_LEN 16000`.
+`PJSIP_DONT_SWITCH_TO_TCP` is **not** set — it used to be, and it disabled RFC 3261 §18.1.1 outright,
+so no authenticated call could be placed over UDP.
+
+### Two literals, and why only two
+
+A value here is only worth overriding when upstream's own default is **insufficient**. Restating a
+default as a literal reads as harmless and is not: it pins the number against a future upstream
+release that raises it, and it hides which values we actually have an opinion about.
+
+So the capacity block sets exactly two numbers and hands the rest back:
+
+| Macro | What we do | Why |
+|---|---|---|
+| `PJSIP_MAX_PKT_LEN` | **16000** | Upstream's ~4000 truncates real INVITEs carrying a video SDP, ICE candidates, a long Route set and an Authorization header. A hard truncation point, not a soft one. |
+| `PJSUA_MAX_CALLS` | **8** | Upstream and the preset both say 4, and 4 is not enough — the live suite's test05 saturates it by design with no headroom, and 4 is low for a conference-capable softphone. The one place we knowingly pin above upstream. |
+| `PJSUA_MAX_ACC` | bare `#undef` | Only the *preset* was in the way (it cuts upstream's 8 to 4). Upstream's default is already what we want, so take whatever it is. |
+| `PJSUA_MAX_CONF_PORTS` | bare `#undef` | Same shape: the preset replaces upstream's 254 with `PJSUA_MAX_CALLS + 2*PJSUA_MAX_PLAYERS`. |
+
+The bare `#undef` matters because `pjsua.h` guards each of these with `#ifndef` — undoing the preset
+and stopping there inherits upstream's number, today's and tomorrow's.
 
 Everything below is **not** set, and inherits an upstream default of `0`.
 

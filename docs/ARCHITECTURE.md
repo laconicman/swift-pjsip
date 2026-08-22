@@ -134,6 +134,13 @@ The exact file therefore travels inside `Headers/pj/`, the umbrella headers pin
 `PJ_AUTOCONF=1` so the autoconf headers match the binary, and the README forbids
 overrides. Need different options? Rebuild — that's what `scripts/` is for.
 
+What goes *in* that file is deliberately narrow: override a value only where
+upstream's own default is insufficient, and undo the `PJ_CONFIG_IPHONE` preset
+with a bare `#undef` where it is not — restating today's upstream default as a
+literal pins it against a future release that raises it. The reasoning, and the
+two values that do clear the bar, are in
+[Build-Time-Feature-Gates.md](./Build-Time-Feature-Gates.md).
+
 ### 6. Committed binary, never Git LFS
 
 SwiftPM's resolver does a plain git clone and **does not run the Git LFS smudge

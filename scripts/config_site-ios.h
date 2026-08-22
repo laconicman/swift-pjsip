@@ -36,16 +36,28 @@
 #include <pj/config_site_sample.h>
 
 /* ---------------------------------------------------------------------------
- * Capacity — raised above the iPhone preset
+ * Capacity — the 2012-iPhone preset's cuts, undone
  *
- * The preset targets a 2012 iPhone. Both values below are #undef'd first
- * because config_site_sample.h has already defined them.
+ * All three are #undef'd first because config_site_sample.h has already
+ * defined them; the sample uses bare #define, so defining before it has no
+ * effect.
+ *
+ * Note the shape of the first and third: an #undef with NO redefinition. That
+ * hands the macro back to pjsua.h's own #ifndef default, so if upstream ever
+ * raises one of these we inherit the new value. Restating today's default as a
+ * literal would look identical in this build and silently cap a future one —
+ * and it would be an override we cannot justify, since the only thing wrong
+ * with those two was the preset lowering them. Only override a default that is
+ * actually insufficient; PJSUA_MAX_CALLS and PJSIP_MAX_PKT_LEN are the two that
+ * clear that bar, and both say so where they are set.
  * ------------------------------------------------------------------------- */
 
-/* 8 accounts (= upstream default, pjsua.h:3969; the preset cuts it to 4).
+/* Accounts: whatever upstream defaults to (pjsua.h:3969, 8 as of 2.17/master);
+ * the preset cuts it to 4.
  *
  * WHY: 4 is the whole account table, so the live SIP test suite could not add
- * a second provider pair without retiring an existing one.
+ * a second provider pair without retiring an existing one. Upstream's own
+ * default is already enough — the preset is the only thing in the way.
  *
  * COST: pjsua_var.acc[] is a FIXED array inside the pjsua_data singleton
  * (pjsua_internal.h:619-623) and init_data() walks all of it at startup, so
@@ -54,14 +66,16 @@
  * +4 accounts = +28 KB, and sizeof(pjsua_data) is 106568 B in total.
  */
 #undef  PJSUA_MAX_ACC
-#define PJSUA_MAX_ACC 8
 
 /* 8 simultaneous calls (the preset AND upstream both say 4 — pjsua.h:5928 —
- * so this is a departure from upstream, not a restoration).
+ * so this is a departure from upstream, not a restoration, and the only
+ * literal in this section).
  *
- * WHY: offhook's test05 saturates the limit at exactly 4 by design and has
- * no headroom to test anything past it; 4 is also low for a conference-capable
- * softphone.
+ * WHY: 4 is genuinely insufficient, which is what earns the override — the
+ * live suite's test05 saturates the limit at exactly 4 by design and has no
+ * headroom to test anything past it, and 4 is low for a conference-capable
+ * softphone. It does pin: were upstream to raise its own default past 8, this
+ * line would hold us at 8 until someone edits it.
  *
  * COST: unlike PJSUA_MAX_ACC this is only a ceiling — pjsua_var.calls is
  * pool-allocated at pjsua_init() to ua_cfg.max_calls (pjsua_core.c:110-122),
@@ -72,12 +86,13 @@
 #undef  PJSUA_MAX_CALLS
 #define PJSUA_MAX_CALLS 8
 
-/* 254 conference slots (= upstream default, pjsua.h:7980).
+/* Conference slots: whatever upstream defaults to (pjsua.h:7980, 254 as of
+ * 2.17/master).
  *
  * WHY: this — not PJSUA_MAX_CALLS — is the real ceiling on a locally mixed
- * conference. The preset redefines it as (PJSUA_MAX_CALLS + 2*PJSUA_MAX_PLAYERS),
- * i.e. 12 before this file and 16 after, while every call, player and recorder
- * occupies a slot. Restoring the upstream default beats inventing a number.
+ * conference. The preset replaces it with (PJSUA_MAX_CALLS + 2*PJSUA_MAX_PLAYERS),
+ * i.e. 16 with the calls value above, while every call, player and recorder
+ * occupies a slot. Handing it back to upstream beats inventing a number.
  *
  * Note the macro is only the DEFAULT for pjsua_media_config.max_media_ports
  * (pjsua_core.c:442), and that runtime field is what actually sizes the bridge
@@ -94,7 +109,6 @@
  * slots cost no CPU.
  */
 #undef  PJSUA_MAX_CONF_PORTS
-#define PJSUA_MAX_CONF_PORTS 254
 
 /* PJSIP_MAX_TSX_COUNT / PJSIP_MAX_DIALOG_COUNT stay at the preset's 31.
  * They look like caps but are pj_hash_create() bucket counts (hash.c:89-120,
