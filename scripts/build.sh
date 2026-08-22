@@ -493,9 +493,29 @@ EOF
     #    <pjsua-lib/pjsua.h> include, so the two can be imported together
     #    without duplicate-symbol conflicts. [system] silences PJSIP's many C
     #    warnings; `requires cplusplus` keeps PJSUA2 out of pure-C builds.
+    #
+    #    The two `textual header` lines are LOAD-BEARING, not tidiness. An
+    #    `umbrella header` also registers its own directory (= all of Headers/)
+    #    as an umbrella DIRECTORY, and clang then gives every header under it
+    #    its own inferred submodule with its own macro scope. When two headers
+    #    define the same macro, the importer gets the FIRST definer's value and
+    #    the later override is silently dropped -- no warning, not even under
+    #    -Wambiguous-macro. config_site.h is exactly that shape: it includes
+    #    config_site_sample.h (which sets the PJ_CONFIG_IPHONE preset) and then
+    #    overrides it. Result before this fix: the library was built with
+    #    PJSUA_MAX_ACC 8 / PJSUA_MAX_CALLS 8 / PJSUA_MAX_CONF_PORTS 254, while
+    #    every Swift consumer imported the preset's 4 / 4 / 12 -- and with
+    #    them a pjsua_conf_port_info of 136 bytes against the binary's 1104,
+    #    i.e. a buffer overflow waiting for the first pjsua_conf_get_port_info()
+    #    call. Marking both config headers `textual` keeps them out of the
+    #    submodule split, so every override lands in one macro scope and the
+    #    module agrees with libpjproject.a. Reproduce either direction with
+    #    `clang -E` vs `clang -fmodules -E`; verify-xcframework.sh asserts it.
     cat > "${work}/Headers/module.modulemap" <<'EOF'
 module PJSIP [system] {
     umbrella header "PJSIP-umbrella.h"
+    textual header "pj/config_site.h"
+    textual header "pj/config_site_sample.h"
     export *
 }
 

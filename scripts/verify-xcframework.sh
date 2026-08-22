@@ -247,9 +247,20 @@ verify_headers() {
     if [[ -f "$mm" ]]; then
         report "module map vends PJSIP"  "module map: PJSIP module missing"  grep -q 'module PJSIP'  "$mm"
         report "module map vends PJSUA2" "module map: PJSUA2 module missing" grep -q 'module PJSUA2' "$mm"
-        report "PJSIP uses an umbrella *header* (single-TU, include-order safe)" \
+        report "PJSIP uses an umbrella *header* (not a hand-listed header set)" \
                "module map: expected 'umbrella header' form" \
                grep -q 'umbrella header' "$mm"
+        # An umbrella header also makes Headers/ an umbrella DIRECTORY, which
+        # splits every header under it into its own inferred submodule with its
+        # own macro scope. Both config headers must be excluded from that split
+        # or config_site.h's overrides never reach the importer (see the Module
+        # ABI section below, and scripts/build.sh step 4).
+        if grep -q 'textual header "pj/config_site.h"' "$mm" \
+           && grep -q 'textual header "pj/config_site_sample.h"' "$mm"; then
+            pass "config headers marked 'textual' (overrides stay in one macro scope)"
+        else
+            fail "module map: pj/config_site.h and pj/config_site_sample.h must be 'textual header'"
+        fi
         if grep -q 'requires cplusplus' "$mm"; then
             pass "PJSUA2 gated behind 'requires cplusplus'"
         else
@@ -294,6 +305,77 @@ verify_headers() {
         fi
     else
         fail "pj/config_site.h missing from Headers (ABI contract undocumented)"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Module ABI: what `import PJSIP` sees must equal what libpjproject.a was built
+# with. These are two different code paths, not the same one twice — `#include`
+# reads config_site.h textually, while `import` reads a compiled clang module,
+# and a module can disagree with its own headers. An `umbrella header` also
+# registers its directory as an umbrella DIRECTORY; clang then gives each header
+# under it a separate submodule and macro scope, and when two headers define the
+# same macro the importer silently keeps the FIRST definer's value. That is how
+# the withdrawn 0.2.0 shipped PJSUA_MAX_ACC 8 in the binary and 4 in Swift, with a
+# pjsua_conf_port_info 968 bytes shorter than the one the library writes into.
+# Nothing warns about it — not even -Wambiguous-macro — so the only way to know
+# is to expand the macros both ways and compare.
+# ---------------------------------------------------------------------------
+
+verify_module_abi() {
+    section "── Module ABI (textual headers vs compiled clang module)"
+    local headers="$XCF/ios-arm64-simulator/Headers"
+    [[ -d "$headers" ]] || { fail "ios-arm64-simulator/Headers missing"; return; }
+
+    # Every object-like macro the headers define, expanded through the umbrella.
+    # Each name is wrapped in a string literal so the probe line naming it
+    # survives its own macro expansion.
+    grep -rhoE '^[[:space:]]*#[[:space:]]*define[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]' \
+         "$headers" | awk '{print $NF}' | sort -u > "$TMP/abi-names"
+    {
+        echo '#include "PJSIP-umbrella.h"'
+        awk '{print "@@ \"" $1 "\" = " $1}' "$TMP/abi-names"
+    } > "$TMP/abi-probe.c"
+
+    rm -rf "$TMP/abi-mc"
+    xcrun --sdk iphonesimulator clang -E -I"$headers" -x c "$TMP/abi-probe.c" 2>/dev/null \
+        | grep '^@@' > "$TMP/abi-textual"
+    xcrun --sdk iphonesimulator clang -E -fmodules -fmodules-cache-path="$TMP/abi-mc" \
+        -I"$headers" -x c "$TMP/abi-probe.c" 2>/dev/null | grep '^@@' > "$TMP/abi-modular"
+
+    if [[ ! -s "$TMP/abi-textual" || ! -s "$TMP/abi-modular" ]]; then
+        fail "module ABI: could not preprocess the headers both ways"
+        return
+    fi
+
+    local diverged
+    # diff exits 1 when the files differ, which is the case this check is FOR.
+    diverged="$( { diff "$TMP/abi-textual" "$TMP/abi-modular" || true; } \
+                | sed -n 's/^< @@ "\([A-Za-z_][A-Za-z0-9_]*\)".*/\1/p' | sort -u | tr '\n' ' ')"
+    if [[ -z "$diverged" ]]; then
+        pass "all $(wc -l < "$TMP/abi-names" | tr -d ' ') macros expand identically textually and through the module"
+    else
+        fail "module disagrees with the headers on: ${diverged% }"
+    fi
+
+    # The consequence with teeth: a public struct sized by one of those macros.
+    # If the module's layout is smaller than the binary's, every call that fills
+    # one in overflows the caller's buffer.
+    printf '#include "PJSIP-umbrella.h"\n_Static_assert(sizeof(pjsua_conf_port_info) == 0, "");\n' \
+        > "$TMP/abi-size.c"
+    local textual_size modular_size
+    # The _Static_assert is designed to fail: clang prints the evaluated size in
+    # the diagnostic. Exit 1 is the expected path, so swallow it.
+    textual_size="$( { xcrun --sdk iphonesimulator clang -fsyntax-only -I"$headers" \
+        -x c "$TMP/abi-size.c" 2>&1 || true; } | grep -oE "evaluates to '[0-9]+" \
+        | grep -oE '[0-9]+' | head -1 || true)"
+    modular_size="$( { xcrun --sdk iphonesimulator clang -fsyntax-only -fmodules \
+        -fmodules-cache-path="$TMP/abi-mc" -I"$headers" -x c "$TMP/abi-size.c" 2>&1 || true; } \
+        | grep -oE "evaluates to '[0-9]+" | grep -oE '[0-9]+' | head -1 || true)"
+    if [[ -n "$textual_size" && "$textual_size" == "$modular_size" ]]; then
+        pass "sizeof(pjsua_conf_port_info) = $textual_size both ways"
+    else
+        fail "sizeof(pjsua_conf_port_info): headers say ${textual_size:-?}, module says ${modular_size:-?}"
     fi
 }
 
@@ -352,6 +434,7 @@ verify_typecheck() {
 verify_slice "ios-arm64" "IOS"
 verify_slice "ios-arm64-simulator" "IOSSIMULATOR"
 verify_headers
+verify_module_abi
 verify_signature
 if [[ $TYPECHECK -eq 1 ]]; then
     verify_typecheck

@@ -68,13 +68,58 @@ importable module names come from the **module map**, not the target name — on
 `<pjsua-lib/pjsua.h>`, so the C API stays reachable from C++ contexts without
 duplicate-symbol problems.
 
-### 4. `umbrella header`, not `umbrella "directory"`
+### 4. `umbrella header` — plus `textual header` for the config pair
 
 PJSIP officially supports a *bridging header*, i.e. one textual translation unit
 with a controlled include order. A directory umbrella compiles each header
-independently and breaks on PJSIP's include-order assumptions. The single-file
-`umbrella header` form reproduces the bridging-header semantics inside a module —
-this is the one trick that makes PJSIP importable as a module at all.
+independently and breaks on PJSIP's include-order assumptions, so the module map
+uses the single-file `umbrella header` form — the trick that makes PJSIP
+importable as a module at all.
+
+It does **not** buy as much as it looks like it does, and this is what
+**withdrew 0.2.0**. Naming an umbrella header also registers that header's
+*directory* — all of `Headers/` — as an umbrella directory, so clang still gives
+each header underneath its own inferred submodule and its own macro scope. Where
+two headers define the same macro, an importer keeps the **first definer's**
+value and drops the later override, with no diagnostic — not even under
+`-Wambiguous-macro`. `config_site.h` is precisely that shape: it includes
+`config_site_sample.h` for the `PJ_CONFIG_IPHONE` preset, then undoes the parts
+of it we disagree with.
+
+So 0.2.0's `libpjproject.a` had `PJSUA_MAX_ACC` 8, `PJSUA_MAX_CALLS` 8 and
+`PJSUA_MAX_CONF_PORTS` 254 while `import PJSIP` handed Swift the preset's 4, 4
+and 12 — and with them a `pjsua_conf_port_info` of 136 bytes against the
+binary's 1104, i.e. a buffer the library overruns on the first
+`pjsua_conf_get_port_info()`. The headers were right, the binary was right, and
+the module between them was not.
+
+Hence the two `textual header` lines:
+
+```
+module PJSIP [system] {
+    umbrella header "PJSIP-umbrella.h"
+    textual header "pj/config_site.h"
+    textual header "pj/config_site_sample.h"
+    export *
+}
+```
+
+`textual` keeps both files out of the submodule split, so every override lands in
+the same macro scope as the definition it overrides.
+
+Two things worth keeping straight, because both cost time to learn:
+
+- **`#undef` is not the trigger.** A plain cross-header redefinition loses the
+  same way. `PJSIP_MAX_PKT_LEN 16000` survived 0.2.0 only because nothing else
+  defines it — one definer, nothing to lose to.
+- **Nothing detects this at build time on its own.** So
+  `scripts/verify-xcframework.sh` expands every object-like macro in the headers
+  with `clang -E` and again with `clang -fmodules -E`, and fails the artifact if
+  any of the ~1400 disagree, plus a `sizeof(pjsua_conf_port_info)` cross-check.
+  The same two commands reproduce it by hand on any artifact.
+
+Fixed in 0.2.1 — headers only; the `libpjproject.a` objects are byte-identical
+to the withdrawn 0.2.0 build (428/428 per slice).
 
 Generated umbrella files are suffixed (`PJSIP-umbrella.h`) because macOS
 filesystems are case-insensitive: a generated `PJSIP.h` would silently overwrite
