@@ -245,11 +245,48 @@ LGPL constrains — an app shipping this artifact takes on the LGPL's relinking 
 component. Rebuild without it (`--without-bcg729`, and drop `PJMEDIA_HAS_BCG729`) if that is
 unacceptable.
 
-**New in 2.17/master, and worth knowing:** `ai_port.o` and `ai_port_openai.o` — a pjmedia media
-port that streams audio to OpenAI's realtime API. It is compiled in by upstream default and is now
-inside the archive (8 KB, referencing only `pj_http_*`, `pj_json_parse`, `pj_base64_*` which were
-already there). It is inert unless an app calls it, and the linker dead-strips it otherwise, but it
-is a new network-egress surface that did not exist in 2.16. Nothing in this workspace uses it.
+### New in 2.17/master: an AI media port, and a WebSocket client under it
+
+`0.2.0` is the first artifact to contain `ai_port.o`, `ai_port_openai.o` and `websock.o`. None of
+this existed in the 2.16 build. Worth stating precisely, because "PJSIP now talks to OpenAI" is
+both true and misleading.
+
+**What it is.** `pjmedia_ai_port` is a `pjmedia_port` that bridges the conference bridge to a
+real-time AI service over a WebSocket, with a pluggable backend abstraction; `ai_port_openai.c` is
+the one shipped backend (OpenAI Realtime API — 24 kHz PCM16, server-side VAD, base64 JSON events).
+It arrived with a sample app, `aidemo.c`.
+
+**Provenance** — all PRs, no upstream issue exists for any of it:
+
+| Upstream | What | Merged |
+|---|---|---|
+| [#4859](https://github.com/pjsip/pjproject/pull/4859) | Experimental **WebSocket client** in pjlib-util (`websock.c`) — the parent this is built on | 2026-03-18 |
+| [#4866](https://github.com/pjsip/pjproject/pull/4866) | The AI media port + OpenAI Realtime backend + `aidemo` sample (~2200 lines) | 2026-03-18 |
+| [#4870](https://github.com/pjsip/pjproject/pull/4870) | PJSUA2 `AudioMediaAiPort` wrapper | 2026-03-19 |
+| [#5058](https://github.com/pjsip/pjproject/pull/5058) | Hardening: bound the `Sec-WebSocket-Accept` read to the received handshake data | 2026-07-10 |
+
+All by Teluu (`nanangizz`) except #5058, and all labelled **experimental** upstream.
+
+**It cannot be compiled out from `config_site.h`.** There is no `PJMEDIA_HAS_AI_PORT` gate: both
+`pjmedia/build/Makefile` and `pjmedia/CMakeLists.txt` list `ai_port.c` and `ai_port_openai.c`
+unconditionally. The only lever is patching the build files — which is what `scripts/patches/` is
+for, should we ever want it.
+
+**It is inert, and more strongly than "dead-stripped".** Every entry point is a `PJ_DEF` function
+(`pjmedia_ai_port_create`, `_connect`, …); nothing self-starts, and no pjsua path reaches it. As a
+member of a static archive, `ai_port_openai.o` is only pulled into an executable if some symbol in
+it is referenced — an app that never calls the API does not link it at all. Nothing in this
+workspace calls it.
+
+**What it would do if called.** The caller supplies the `ws://`/`wss://` URL and a bearer token
+(`Authorization: Bearer …`); nothing is hardcoded to OpenAI at the transport level. So the honest
+statement is: the artifact now contains a general-purpose WebSocket client and a media port that
+can stream call audio to an arbitrary endpoint, if an application asks it to.
+
+**The reason to keep an eye on it** is #5058, not #4866: `websock.c` is a young, self-described
+experimental HTTP-upgrade/WebSocket implementation that has already needed a bounds fix in its
+handshake parsing, and it is now linked into the same archive as the SIP stack. It is unreachable
+from our code, but it is code we ship.
 
 ## Distribution: a GitHub Release asset, not a committed binary
 
@@ -304,7 +341,7 @@ below reintroduces the corresponding defect in every consumer, silently.
 
 Record the source commit in `RELEASE-NOTES.md` at build time; a tag alone does not say which
 pjproject tree produced it. The running scan of what has changed upstream since the shipped binary,
-and the bump checklist, live in `swift-pjsua/Upstream/reference-post-2.16-fixes-impact.md`.
+and the bump checklist, live in `swift-pjsua/Upstream/post-2.16-fixes-impact.md`.
 
 ## Release flow
 
