@@ -12,7 +12,7 @@ manual library juggling, no build-from-source ritual.
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/laconicman/swift-pjsip", from: "0.1.0")
+    .package(url: "https://github.com/laconicman/swift-pjsip", from: "0.2.1")
 ]
 ```
 
@@ -77,7 +77,7 @@ Or in a `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/laconicman/swift-pjsip", from: "0.1.0")
+    .package(url: "https://github.com/laconicman/swift-pjsip", from: "0.2.1")
 ]
 ```
 
