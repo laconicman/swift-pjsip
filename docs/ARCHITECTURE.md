@@ -397,6 +397,22 @@ and the bump checklist, live in `swift-pjsua/Upstream/post-2.16-fixes-impact.md`
 
 ## Release flow
 
+**You almost certainly do not need this.** The published artifact is the whole stack —
+video with hardware H.264, native Darwin TLS, G.729, SRTP, UDP/TCP/TLS — and adding the
+package is the supported path. Nothing below is a prerequisite for anything the release
+already does.
+
+Rebuild and re-release from source when you want the artifact to decide *differently*:
+your own codec set (Opus, a licensed IPP G.729 — [Codec-Coverage.md](./Codec-Coverage.md)),
+your own patches on top of pjproject (this build carries one), OpenSSL instead of the
+Darwin TLS backend, platforms or slices this one does not ship, other `config_site`
+capacities — anything in [Build-Time-Feature-Gates.md](./Build-Time-Feature-Gates.md),
+since those are compiled in and no consumer can change them afterwards. Or simply because
+you would rather not ship a binary you did not build yourself.
+
+Then the loop below is yours to run: `origin`, `main`, and the version you tag are your
+fork's, not this repo's.
+
 ```bash
 ./scripts/build.sh all          # build (interactive source pick or -y for latest)
 ./scripts/build.sh dist notes   # zip + checksum + release notes
