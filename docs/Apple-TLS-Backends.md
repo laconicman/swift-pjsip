@@ -53,6 +53,24 @@ build needs those linker flags supplied by hand. Ours are.
 > decorative; it is not what selects our TLS. `build.sh` already carries a comment saying
 > so.
 
+### This is now a build check, not just this paragraph
+
+`scripts/verify-xcframework.sh` asserts the backend from the artefact's symbol table, so a
+`config_site.h` that stops selecting it fails CI instead of failing in an app. The three
+backends are distinguishable by who they call, and the check is exactly that:
+
+| backend | undefined symbols it leaves in `libpjproject.a` |
+|---|---|
+| `PJ_SSL_SOCK_IMP_APPLE` (ours) | `_nw_*` **and** `_sec_protocol_*` |
+| `PJ_SSL_SOCK_IMP_DARWIN` | Secure Transport: `_SSLCreateContext`, `_SSLHandshake`, … (`^_SSL[A-Z]`) |
+| OpenSSL | `_SSL_CTX_new`, `_OPENSSL_init_ssl` |
+
+Note that `_Sec*` on its own proves nothing — **both** Apple backends call
+Security.framework to import certificates, which is why the check pairs `_nw_*` with
+`_sec_protocol_*` and separately requires zero `^_SSL[A-Z]`. Measured on the 2.17.0
+(`288de6142`) artefact: 33 `_nw_*`, 12 `_sec_protocol_*`, 0 Secure Transport, 0 OpenSSL,
+identical across both slices.
+
 ## The Apple backend requires the select ioqueue
 
 Not documented anywhere upstream, and easy to get wrong: **`PJ_SSL_SOCK_IMP_APPLE` only

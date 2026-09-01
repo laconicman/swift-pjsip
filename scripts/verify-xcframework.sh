@@ -7,8 +7,8 @@
 # Checks, per slice:
 #   - architecture (arm64) and platform tag (device vs simulator, via
 #     LC_BUILD_VERSION) and minimum iOS version
-#   - native Darwin SSL: Security/Network framework symbol references present,
-#     OpenSSL symbols absent
+#   - TLS backend: the Apple/Network.framework one (PJ_SSL_SOCK_IMP_APPLE) —
+#     nw_*/sec_protocol_* referenced, Secure Transport and OpenSSL absent
 #   - TLS transport, video subsystem, VideoToolbox codec, bcg729 (G.729),
 #     SRTP — all present as defined symbols
 #   - disabled codecs (GSM, Speex) absent
@@ -164,17 +164,37 @@ verify_slice() {
     check_defined "$slice" "pj_init"      "pjlib core built"
     check_defined "$slice" "pjsua_create" "pjsua (high-level C API) built"
 
-    # TLS transport + native Darwin SSL (--enable-darwin-ssl):
-    # the Darwin backend talks to Apple's Network/Security frameworks, so the
-    # archive must REFERENCE their symbols; OpenSSL symbols must be absent.
+    # TLS transport + the *Apple/Network.framework* backend specifically.
+    #
+    # `PJ_SSL_SOCK_IMP` is chosen only by config_site.h — ./configure cannot select
+    # either Apple backend (docs/Apple-TLS-Backends.md, "Selecting a backend"), and
+    # when nothing selects one the failure is silent: PJ_HAS_SSL_SOCK undefined →
+    # PJSIP_HAS_TLS_TRANSPORT undefined → sip_transport_tls.c compiles to nothing,
+    # and the first symptom is pjsua_transport_create(PJSIP_TRANSPORT_TLS, …) failing
+    # inside an app. So assert the backend from the symbol table, not from the build log.
+    #
+    # The three backends are told apart by who they call:
+    #   apple  (PJ_SSL_SOCK_IMP_APPLE, ours) → Network.framework `nw_*` + `sec_protocol_*`
+    #   darwin (PJ_SSL_SOCK_IMP_DARWIN)      → Secure Transport `SSLCreateContext` & co.
+    #   openssl                              → `SSL_CTX_new`, `OPENSSL_init_ssl`
+    # `_Sec*` alone does NOT discriminate: both Apple backends use Security.framework to
+    # import certificates, so the old Security-or-Network test passed for either one.
     check_defined "$slice" "pjsip_tls_transport_start" "TLS transport compiled in (PJSIP_HAS_TLS_TRANSPORT)"
-    local sec_refs nw_refs
-    sec_refs="$(count_prefix_u "$slice" "Sec")"
+    local nw_refs secproto_refs securetransport_refs
     nw_refs="$(count_prefix_u "$slice" "nw_")"
-    if [[ "${sec_refs:-0}" -gt 0 || "${nw_refs:-0}" -gt 0 ]]; then
-        pass "native Darwin SSL: references Security (${sec_refs:-0}) / Network (${nw_refs:-0}) framework symbols"
+    secproto_refs="$(count_prefix_u "$slice" "sec_protocol_")"
+    # `^_SSL[A-Z]` matches Secure Transport (`_SSLHandshake`) and not OpenSSL
+    # (`_SSL_CTX_new`), whose next character is an underscore.
+    securetransport_refs="$(count_prefix_u "$slice" "SSL[A-Z]")"
+    if [[ "${nw_refs:-0}" -gt 0 && "${secproto_refs:-0}" -gt 0 ]]; then
+        pass "TLS backend is PJ_SSL_SOCK_IMP_APPLE: Network.framework (${nw_refs:-0} _nw_*, ${secproto_refs:-0} _sec_protocol_*)"
     else
-        fail "native Darwin SSL: no Security/Network framework symbol references found"
+        fail "TLS backend is NOT the Apple/Network.framework one (${nw_refs:-0} _nw_*, ${secproto_refs:-0} _sec_protocol_*) — check PJ_SSL_SOCK_IMP in config_site.h"
+    fi
+    if [[ "${securetransport_refs:-0}" -eq 0 ]]; then
+        pass "no Secure Transport (deprecated PJ_SSL_SOCK_IMP_DARWIN backend absent)"
+    else
+        fail "Secure Transport symbols present (${securetransport_refs}) — the deprecated darwin backend got built"
     fi
     check_absent "$slice" "SSL_CTX_new"     "no OpenSSL (SSL_CTX_new)"
     check_absent "$slice" "OPENSSL_init_ssl" "no OpenSSL (OPENSSL_init_ssl)"
