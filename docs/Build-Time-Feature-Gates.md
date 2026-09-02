@@ -67,6 +67,30 @@ Everything below is **not** set, and inherits an upstream default of `0`.
   `pjsua_stream_stat.jbuf` and approximates the same signal for free. Reasoning:
   `../../offhook/docs/Call-Quality-Statistics.md` §6.
 
+### `PJMEDIA_SRTP_HAS_DTLS` — DTLS-SRTP keying
+
+- **Default `0`** (`pjmedia/include/pjmedia/config.h:1190-1192`), and we take that default. The
+  sibling gate `PJMEDIA_SRTP_HAS_SDES` is `1` (`:1180-1182`), as is `PJMEDIA_HAS_SRTP` (`:1170-1171`).
+  Measured on the shipped artefact: 401 `srtp_*` symbols, 30 SDES, and **zero OpenSSL** — DTLS is
+  present only as its disabled stubs.
+- **So SRTP works and DTLS-SRTP does not.** Media encryption is available today through **SDES**,
+  which carries the key in the SDP. That is why the binary needs no crypto library: SDES leans on
+  the signalling channel being secure rather than doing its own key agreement.
+- **Buys:** the other keying method — a DTLS handshake on the media path, so the key never appears
+  in signalling. Required for WebRTC interop, and preferred or mandated by some providers.
+- **Costs: OpenSSL, unavoidably.** `pjmedia/src/pjmedia/transport_srtp_dtls.c` includes
+  `openssl/bn.h`, `ec.h`, `rsa.h`, `ssl.h` unconditionally at the top, so turning this gate on
+  without linking OpenSSL does not compile. This is independent of `PJ_SSL_SOCK_IMP`: our SIP-TLS
+  going through Apple's Network framework does not help here, and `aconfigure.ac:2191` says as much
+  ("DTLS requires OpenSSL").
+- The real cost is not the build. It is inheriting OpenSSL's CVE cadence into a binary we ship, plus
+  the size, in exchange for one keying method.
+- **Decision (2026-09-02): leave off.** Revisit when a target provider actually requires DTLS-SRTP;
+  see `../../offhook/docs/Roadmap.md` for the trigger and `../../offhook/docs/Tech-Debt.md` OH-10
+  for what SDES-only costs us meanwhile. Note upstream is actively working this area
+  (pjproject#5231 modernised the DTLS-SRTP certificate to the OpenSSL 3.0 key-generation API),
+  so the ground may move.
+
 ### `PJMEDIA_STREAM_ENABLE_KA` — RTP keep-alive
 
 - **Default `0`** (`pjmedia/include/pjmedia/config.h:1441-1442`); interval 5 s, start count 2
