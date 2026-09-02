@@ -141,14 +141,23 @@ literal pins it against a future release that raises it. The reasoning, and the
 two values that do clear the bar, are in
 [Build-Time-Feature-Gates.md](./Build-Time-Feature-Gates.md).
 
-### 6. Committed binary, never Git LFS
+### 6. Never Git LFS — superseded on the first half, still binding on the second
 
-SwiftPM's resolver does a plain git clone and **does not run the Git LFS smudge
-filter** — LFS-backed consumers receive ~130-byte pointer files and a broken
-xcframework. The `.a` files (~13 MB each) are committed as normal git blobs
-(`.gitattributes: *.a binary`), comfortably under GitHub's limits. For
-larger/more frequent releases, `scripts/build.sh dist` produces the zip +
-checksum for the `.binaryTarget(url:checksum:)` release-asset alternative.
+Originally "committed binary, never Git LFS". Since `0.1.2` the binary is **not in the
+repository at all**; it is a release asset fetched by `.binaryTarget(url:checksum:)`
+(see *Distribution* below, which is the decision that superseded this one).
+
+**The LFS half is not superseded, and is the reason this entry stays.** SwiftPM's resolver
+does a plain `git clone` and **does not run the Git LFS smudge filter**, so LFS-backed
+consumers receive ~130-byte pointer files and a broken xcframework. This is not a
+prediction: LFS was chosen, set up, and abandoned here for exactly that reason
+([SPM-XCFRAMEWORK-EXPERIENCE.md](./SPM-XCFRAMEWORK-EXPERIENCE.md) §5.1, with the reversal
+recipe in §6). **Do not revisit it** — the repository being large is not an argument for
+LFS, because LFS does not solve it for an SPM consumer; it is an argument for not putting
+the binary in the repository, which is what was done.
+
+So the standing rule is one line: an SPM-consumed binary is served over **https as a release
+asset**, never from git, and `.gitattributes` marks `*.a binary` without `filter=lfs`.
 
 ### 7. The build scripts live with the binary they produce
 
@@ -204,7 +213,7 @@ headers automatically from the consumer's dependency graph. Its own design notes
 
 ### 10. Unsigned, with signing and privacy left to the integrator
 
-The committed artifact is **unsigned**. Xcode 15+ only *warns* on unsigned binary
+The published artifact is **unsigned**. Xcode 15+ only *warns* on unsigned binary
 dependencies (it records the identity on first use and flags later changes), and an
 open-source artifact anyone can rebuild can't meaningfully share one signing identity —
 so signing is the integrator's call (`codesign --timestamp -s <identity>`;

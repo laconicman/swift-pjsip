@@ -251,8 +251,8 @@ artifact checksums, and the verification result.
 ## Architecture & design decisions
 
 The non-obvious choices (one combined xcframework instead of twenty; umbrella
-*header* instead of umbrella directory; committed binary instead of Git LFS; two
-modules from one binary target; …) are documented in:
+*header* instead of umbrella directory; a release asset instead of Git LFS or a
+committed binary; two modules from one binary target; …) are documented in:
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — how the pieces fit together and why
 - [`docs/SPM-XCFRAMEWORK-EXPERIENCE.md`](docs/SPM-XCFRAMEWORK-EXPERIENCE.md) — field
