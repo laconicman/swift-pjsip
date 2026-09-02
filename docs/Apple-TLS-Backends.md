@@ -89,7 +89,8 @@ never drained. There is no runtime error; connections simply hang.
 We are safe today because our `config_site.h` does not override `PJ_IOQUEUE_IMP`, and
 `config.h:752` defaults it to `PJ_IOQUEUE_IMP_SELECT`. **Do not "optimise" that to kqueue.**
 If anyone is tempted, the whole reason is above. Upstream has been asked for a compile-time
-`#error` on the combination (pjproject#5223); until that lands, this doc is the guard.
+`#error` on the combination, and **got it — pjproject#5230, merged.** It is not in our pinned
+binary, so until a rebuild this doc is still the guard.
 
 ## Where the certificate gets loaded: eager vs lazy
 
@@ -221,24 +222,41 @@ pointing at regular files.
 
 ## Known defects, upstream status
 
-Everything below was found while tracing this. Status as of 31 Aug 2026.
+Everything below was found while tracing this. **Statuses re-checked against the pjsip/pjproject
+API on 2 Sep 2026** — the whole PR series has since merged.
 
-| what | affects | status |
+| what | affects | upstream status |
 |---|---|---|
-| Over-release of the imported identity → **segfault on iOS on any valid `.p12`** | Darwin only; fixed in Apple 2023, never backported | **merged** (pjproject#5220) |
-| Listener reports ready with an unloadable certificate | Darwin only; Apple was already eager | **merged** (pjproject#5216) |
-| `create_data_from_file()` truncates at 8 KB | **both** backends | open (pjproject#5222) |
-| Apple TLS backends unbuildable via CMake (`FATAL_ERROR "TODO"`) | both | open (pjproject#5223) |
-| `apple` + non-select ioqueue builds but never connects | Apple | open (pjproject#5223) |
-| `--enable-darwin-ssl` no-op; neither backend selectable from configure | build system | open (pjproject#5217, #5221) |
-| Four unguarded paths in `get_cert_info()` (see pinning section) | **both** | open (pjproject#5224 review) |
-| `get_cert_info()` leaks per renegotiation | **both** | open (pjproject#5215) |
-| ~400 lines duplicated between the two backends | both | open (pjproject#5224) |
+| Over-release of the imported identity → **segfault on iOS on any valid `.p12`** | Darwin only; fixed in Apple 2023, never backported | **merged** (#5220) |
+| Listener reports ready with an unloadable certificate | Darwin only; Apple was already eager | **merged** (#5216, and #5210 for OpenSSL) |
+| `create_data_from_file()` truncates at 8 KB | **both** backends | **merged** (#5222) |
+| Apple TLS backends unbuildable via CMake (`FATAL_ERROR "TODO"`) | both | **merged** (#5223) |
+| `apple` + non-select ioqueue builds but never connects | Apple | **merged** (#5230) — now a compile-time rejection |
+| `--enable-darwin-ssl` no-op; neither backend selectable from configure | build system | fix **merged** (#5221); issue #5217 still open as the register |
+| Certificate code duplicated between the two backends, copies diverged | both | dedup **merged** (#5224, #5226); issue #5215 still open |
+| Unguarded paths in `get_cert_info()` + the per-renegotiation leak | both | **open** — follow-up to #5224, registered as #5232 §1 |
+| `restart2()` returns `PJ_SUCCESS` without restarting a downed listener | TLS transport, both backends | **open** (#5232 §5) |
+| `restart2()` has no `cert_direct` branch although listener start does | TLS transport, both backends | **open** (#5232 §6) |
+| iOS import failures logged as `SecItemImport`, but iOS uses `SecPKCS12Import` | Apple | **open** (#5232 §7) |
 
-**Bottom line for us:** we ship the Apple/Network.framework backend, which is the one
-without the crash and the one that already validates eagerly. What still touches our build
-is the 8 KB truncation, the `get_cert_info()` robustness gaps if we ever pin against
-untrusted peers, and the select-ioqueue constraint.
+The last three came out of building runtime TLS tests against the shipped backend rather than
+from reading it — see `swift-pjsua/docs/Tech-Debt.md` TD-19 and TD-22.
+
+> ### Merged upstream is not shipped here
+>
+> **Read this row of the table as "fixed for whoever builds master", not "fixed for us."** Our
+> binary is pinned at PJSIP 2.17.0 (`288de6142`), which predates every one of those merges. So
+> the 8 KB truncation is **still live in the artefact this package distributes**, and stays live
+> until a rebuild: keep certificate and CA files under 8 KB. `swift-pjsua`'s
+> `TLSTransportTests.testOversizedPKCS12StillFailsToLoad` is the detector — it asserts the
+> *failure*, so it goes red on the rebuild that picks #5222 up, which is the signal to lift the
+> ceiling here and in that test.
+
+**Bottom line for us:** we ship the Apple/Network.framework backend — the one without the crash,
+and the one that already validated eagerly. Against the pinned binary, three things still bite:
+the 8 KB truncation, the `get_cert_info()` robustness gaps if we ever pin against untrusted
+peers, and the select-ioqueue constraint. A rebuild retires the first and the third; the second
+is still open upstream.
 
 ## The lesson worth keeping
 
