@@ -22,8 +22,8 @@
 #   the xcframework headers with swiftc — the closest no-app approximation of
 #   what SwiftPM does in a consumer build.
 #
-# Standalone on purpose: it can verify the committed Binaries/PJSIP.xcframework
-# without any build state. Requires macOS (xcrun, nm, otool, lipo).
+# Standalone on purpose: point it at any unpacked PJSIP.xcframework — a release
+# asset, a build output — with no build state. Needs macOS (xcrun, nm, otool, lipo).
 
 set -euo pipefail
 
@@ -44,7 +44,9 @@ while [[ $# -gt 0 ]]; do
         --expect-min-ios=*) EXPECT_MIN_IOS="${1#*=}"; shift ;;
         --quiet)            QUIET=1; shift ;;
         --typecheck)        TYPECHECK=1; shift ;;
-        -h|--help)          grep '^#' "$0" | sed 's/^# \{0,1\}//' | head -28; exit 0 ;;
+        # 26 = the header block above, which ends at `set -euo pipefail`. Keep this in
+        # step with it, or --help starts printing the helper functions' comments.
+        -h|--help)          grep '^#' "$0" | sed 's/^# \{0,1\}//' | head -26; exit 0 ;;
         *)                  XCF="$1"; shift ;;
     esac
 done

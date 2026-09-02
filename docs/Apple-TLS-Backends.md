@@ -2,7 +2,7 @@
 
 What the two Apple TLS backends actually do with certificates, how they differ from each
 other and from OpenSSL, and what that means for anyone wiring up TLS or certificate
-pinning on top of the committed `PJSIP.xcframework`.
+pinning on top of the `PJSIP.xcframework` this package ships.
 
 Written up after tracing the backends against pjproject master (`256f22d8d`, Aug 2026)
 and testing both on macOS 26 and the iOS 26 Simulator. Upstream issue/PR numbers are
