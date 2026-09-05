@@ -4,6 +4,7 @@
 [![Platforms](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Flaconicman%2Fswift-pjsip%2Fbadge%3Ftype%3Dplatforms)](https://swiftpackageindex.com/laconicman/swift-pjsip)
 [![Latest tag](https://img.shields.io/github/v/tag/laconicman/swift-pjsip?label=release&sort=semver)](https://github.com/laconicman/swift-pjsip/tags)
 [![License](https://img.shields.io/badge/license-MIT%20(package)%20·%20GPL%20(binary)-blue)](#licensing)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/laconicman/swift-pjsip)
 
 **[PJSIP](https://www.pjsip.org) for iOS as a single Swift Package.** Add one URL in
 Xcode, `import PJSIP`, and you have a full SIP/VoIP stack with video
