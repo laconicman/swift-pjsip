@@ -1,0 +1,88 @@
+{
+  "repo_notes": [
+    {
+      "content": "SCOPE — what this repository is and is not. swift-pjsip is a distribution package: it publishes ONE prebuilt binary artifact (PJSIP.xcframework, iOS device and simulator arm64) plus the scripts that reproduce it. It is not PJSIP itself and contains no PJSIP source. The artifact is NOT in this tree — since 0.1.2 it is fetched from a GitHub Release by the binaryTarget(url:checksum:) declared in Package.swift, so nothing under version control here is upstream code. The whole repository is nineteen tracked files: Package.swift, README.md, LICENSE, six documents in docs/, three shell scripts and one config_site header in scripts/, the patches in scripts/patches/, and .github/workflows/ci.yml. That is what the documentation should cover. The Headers/ tree inside the downloaded xcframework (pj/, pjsip/, pjmedia/, pjnath/, pjlib-util/, pj++/, bcg729/) is pjproject's and Belledonne's public API, not this project's — do NOT generate pages documenting pjlib, pjmedia, pjnath, pjsua or PJSUA2 internals. Describe them only as what the artifact vends. The same caution applies to vocabulary rather than files: README.md and the documents in docs/ name those libraries on nearly every page because they describe what is inside the binary, not because this project implements any of them.",
+      "author": "maintainer"
+    },
+    {
+      "content": "AUTHORITATIVE SOURCES, in precedence order. docs/ARCHITECTURE.md is the canonical record of the numbered design decisions and supersedes any inference drawn from the file tree. docs/SPM-XCFRAMEWORK-EXPERIENCE.md holds reusable field notes on distributing a combined C/C++ static library through SwiftPM, including two failure modes worth surfacing prominently: a case-insensitive header collision on APFS, and Git LFS being unusable with SwiftPM's resolver, which clones without running the LFS smudge filter so consumers would resolve pointer files. docs/Versioning.md fixes what a version number means for a package whose payload is invisible to SwiftPM's resolver, and carries the release history table. docs/Codec-Coverage.md and docs/Build-Time-Feature-Gates.md together state what the binary actually carries and why a consumer cannot turn a compiled-out feature back on; Opus is explicitly absent. docs/Apple-TLS-Backends.md is the reference for what the two Apple TLS backends do with certificates. The generated RELEASE-NOTES.md published with each GitHub Release — not a file in this tree — records the exact parameters a given artifact was built with. README.md is the consumer-facing entry point.",
+      "author": "maintainer"
+    },
+    {
+      "content": "CONSUMER CONSTRAINTS that any useful page set must convey. The single binary target vends TWO Clang modules, not one: PJSIP (the C API — pjsua1 plus pjsip, pjmedia, pjnath and pjlib — which imports with no extra configuration) and PJSUA2 (the C++ API, which requires the consumer's own target to enable C++ interop via .interoperabilityMode(.Cxx)). The platform floor is iOS 15, arm64 device and simulator slices only; there is no macOS slice. A SwiftPM binary target cannot carry linkerSettings, so the consuming APP target must itself link the system frameworks the static library references — AVFoundation, AudioToolbox, CoreAudio, CoreMedia, CoreVideo, VideoToolbox, MetalKit, Network, Security, Foundation and libc++ — and importing the module links nothing. scripts/config_site-ios.h is compiled into the artifact and therefore fixes struct layouts and buffer sizes: it is ABI, and a consumer cannot override it, only desynchronise against it. The xcframework ships unsigned and carries no privacy manifest, which a static-library xcframework cannot hold, although PJSIP does call required-reason APIs the consuming app must declare. Licensing is three-layered and materially constrains adoption: MIT for this package, GPL v2-or-later for the PJSIP binary, GPL v3 for the folded-in bcg729 G.729 codec.",
+      "author": "maintainer"
+    }
+  ],
+  "pages": [
+    {
+      "title": "Overview",
+      "purpose": "Explain what swift-pjsip is — a Swift package that distributes one prebuilt, self-contained PJSIP build for iOS as a single binary xcframework — and what it is not: not PJSIP's source, and not a Swift API over it. Cover the problem it removes (the official iOS path has you run an autoconf build yourself, embed around twenty separate static libraries, and expose the C API through a bridging header, with no official SPM or binary artifact), what the artifact contains, and where the reasoning lives. Use README.md as the entry point and point at docs/ARCHITECTURE.md for the decisions.",
+      "parent": null
+    },
+    {
+      "title": "Installation and Integration",
+      "purpose": "Document how a consumer adds this package and reaches working code: the SwiftPM dependency declaration and Xcode's Add Package Dependencies flow, the two importable modules and the C++ interop requirement that PJSUA2 places on the consumer's own target, the iOS 15 floor and arm64-only slices, and the system frameworks the app target must link itself because a SwiftPM binary target cannot carry linkerSettings. Make the import-versus-link distinction explicit: importing a module links nothing, the linker resolves the frameworks when the app binary is produced, and getting it wrong is a build-time link error rather than a runtime crash. Source: README.md and Package.swift.",
+      "parent": null
+    },
+    {
+      "title": "Architecture and Design Decisions",
+      "purpose": "Summarise the numbered design decisions recorded in docs/ARCHITECTURE.md — one combined xcframework instead of twenty static libraries, an umbrella header rather than an umbrella directory, two Clang modules from a single binary target, the artifact fetched rather than committed, and a transparent binary target instead of a wrapper package that force-links frameworks — and explain how the pieces fit together end to end. This page is the reasoning spine; its child pages take three of the decisions in detail.",
+      "parent": null
+    },
+    {
+      "title": "Module Map and Umbrella Headers",
+      "purpose": "Explain how one binary target vends two Clang modules, what the module.modulemap inside the xcframework declares, and why an umbrella header was chosen over an umbrella directory. Cover PJ_AUTOCONF=1 being baked into the umbrella headers so the public headers pull the autoconf headers generated at build time and stay matched to the binary, and the include-order and case-insensitive header-collision traps recorded in docs/SPM-XCFRAMEWORK-EXPERIENCE.md.",
+      "parent": "Architecture and Design Decisions"
+    },
+    {
+      "title": "Binary Distribution Strategy",
+      "purpose": "Document why the xcframework is fetched from a GitHub Release by binaryTarget(url:checksum:) in Package.swift rather than committed to the repository, and why Git LFS is not an alternative — SwiftPM's resolver does a plain clone and never runs the LFS smudge filter, so consumers would resolve pointer files instead of a binary. Cover the cost that motivated the move (incompressible megabytes in every clone, permanently, once per rebuild), how the checksum is published in each release's notes so a downstream author can pin without downloading the asset first, and how scripts/build.sh dist produces the zip and the checksum together. Source: Package.swift, docs/SPM-XCFRAMEWORK-EXPERIENCE.md, docs/Versioning.md.",
+      "parent": "Architecture and Design Decisions"
+    },
+    {
+      "title": "config_site.h and ABI Stability",
+      "purpose": "Explain why scripts/config_site-ios.h is ABI rather than configuration: every #define in it is compiled into the prebuilt binary, fixing struct layouts and buffer sizes, so a consumer who overrides it does not reconfigure the artifact but desynchronises against it. Cover what docs/Build-Time-Feature-Gates.md establishes — that a compiled-out feature cannot be enabled at runtime no matter what the pjsua API appears to offer — and that the only remedy is a rebuild with your own config_site.",
+      "parent": "Architecture and Design Decisions"
+    },
+    {
+      "title": "Building the XCFramework",
+      "purpose": "Document the reproducible build. Cover the phase-based pipeline in scripts/build.sh — download, deps, device, simulator, combine, verify, notes — with each phase re-runnable in isolation; interactive and non-interactive selection of the pjproject and bcg729 sources; toolchain discovery through xcode-select and xcrun rather than hardcoded paths; and the shared helpers in scripts/common.sh. Cover scripts/patches/ as well: build.sh applies every patch sitting directly in that directory to the extracted tree in sorted order before config_site is written, and a patch that will not apply is a deliberate hard build failure, because the failure mode the directory exists to prevent is a rebuild silently dropping a fix upstream has not taken.",
+      "parent": null
+    },
+    {
+      "title": "Verifying the Artifact",
+      "purpose": "Document how a build is proven to match the parameters it was supposed to be built with, by inspecting the binary rather than trusting build logs. Cover what scripts/verify-xcframework.sh checks per slice — architecture and platform tag, minimum iOS version, the native Darwin TLS backend with OpenSSL symbols absent, TLS transport, the video subsystem and the VideoToolbox codec, bcg729, SRTP, GSM and Speex absent, and a sane module map and header layout — plus its typecheck mode, which compiles import PJSIP and import PJSUA2 against the artifact the way SwiftPM would, and how .github/workflows/ci.yml runs manifest validation, verification and shellcheck on every push and pull request.",
+      "parent": null
+    },
+    {
+      "title": "Codec and Media Coverage",
+      "purpose": "State what the shipped binary actually carries and what it does not, drawing on docs/Codec-Coverage.md and docs/Build-Time-Feature-Gates.md: which audio codecs are present, including bcg729 for G.729, which are compiled out (GSM and Speex), that Opus is absent, and that video ships with the iOS camera backend and the VideoToolbox hardware codec alongside SRTP. Make clear these are build-time facts fixed by config_site rather than runtime options, and explain what the absence of a codec costs an app that must interoperate with a provider offering it.",
+      "parent": null
+    },
+    {
+      "title": "TLS on Apple Platforms",
+      "purpose": "Document what docs/Apple-TLS-Backends.md establishes: the two Apple TLS backends PJSIP can use, what each does with certificates, how they differ from each other and from OpenSSL, and what that means for anyone wiring up TLS or certificate pinning on top of this artifact — which is built with --enable-darwin-ssl against the Security and Network frameworks and contains no OpenSSL at all.",
+      "parent": null
+    },
+    {
+      "title": "Versioning and Releases",
+      "purpose": "Explain the release policy recorded in docs/Versioning.md: what a version number can mean for a package whose payload — the pjproject tree the artifact was built from — is invisible to SwiftPM's resolver, how this package's versions relate to PJSIP's, and what each GitHub Release carries, namely the zipped xcframework, the SwiftPM checksum, and the generated RELEASE-NOTES.md recording sources and commits, configure flags, the full config_site.h, Xcode, SDK, clang and CMake versions, artifact checksums and the verification result.",
+      "parent": null
+    },
+    {
+      "title": "Signing, Privacy, and Licensing",
+      "purpose": "Document what a consumer takes on. Cover signing: the xcframework ships unsigned, Xcode records a binary dependency's signing identity the first time it enters a project and warns rather than blocks when a differently-signed copy appears, how to sign a rebuild, and that scripts/verify-xcframework.sh reports signing status. Cover privacy: no PrivacyInfo.xcprivacy ships because a static-library xcframework cannot carry one and PJSIP is not on Apple's list of SDKs that must, yet PJSIP does call required-reason APIs the consuming app must declare in its own manifest. Then cover the three licence layers — MIT for this package per LICENSE, GPL v2-or-later for the PJSIP binary, GPL v3 for the folded-in bcg729 — and what shipping the combination in a closed-source app actually requires. Source: README.md.",
+      "parent": null
+    },
+    {
+      "title": "Field Notes: Shipping C/C++ Through SwiftPM",
+      "purpose": "Document docs/SPM-XCFRAMEWORK-EXPERIENCE.md as transferable technique rather than as trivia about this package: what it takes to distribute any combined C/C++ static library as a SwiftPM binary package, the branching choices and their consequences, and the failure modes — Git LFS pointer files, case-insensitive header collisions, include-order traps. Keep this page general in framing; its value is that the lessons transfer to other prebuilt C or C++ libraries, not that they happen to be about PJSIP.",
+      "parent": null
+    },
+    {
+      "title": "Related Repositories",
+      "purpose": "Map the family this package sits in, as described in README.md and docs/ARCHITECTURE.md: swift-pjsua, an idiomatic Swift-only async wrapper over the pjsua1 C API built on this binary; swift-pjsip-gen, whose SwiftPM plugins parse the headers this package ships and generate Swift conveniences such as CustomStringConvertible conformances for the imported C types; and upstream pjproject, whose source the artifact is built from. Say what each is for and when a reader should go there instead of staying here.",
+      "parent": null
+    }
+  ]
+}
