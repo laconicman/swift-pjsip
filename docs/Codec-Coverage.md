@@ -1,7 +1,8 @@
-# Codec coverage of the committed binary
+# Codec coverage of the shipped binary
 
-What the **currently committed** `PJSIP.xcframework` does and does not carry, and why it
-matters for downstream apps choosing codecs.
+What the `PJSIP.xcframework` this package currently ships does and does not carry, and why
+it matters for downstream apps choosing codecs. (It is a release asset, not a file in this
+repository — see ARCHITECTURE.md *Distribution*.)
 
 ## From the build parameters (the release notes for the pinned version)
 
@@ -27,7 +28,7 @@ configure flags:
 ## Opus is absent
 
 Opus is the de-facto modern SIP/WebRTC audio codec; many providers and conferencing servers
-negotiate it preferentially. It is **not** compiled into the committed binary — confirmed by
+negotiate it preferentially. It is **not** compiled into the shipped binary — confirmed by
 symbol inspection — which limits interop and quality for a general-purpose softphone.
 
 Confirmed via `nm` (no `opus_*` / `pjmedia_codec_opus*` symbols in the archive):
