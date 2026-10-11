@@ -229,10 +229,14 @@
  * (conf_thread.c:1108): no worker threads are created, mixing stays in the
  * sound device's get_frame() thread, and conf_thread_prio, which only applies
  * to workers, does nothing.
- * The one observable difference from conference.c is ordering: the parallel
- * bridge applies queued connect/disconnect/remove operations after the tick's
- * mix (conf_thread.c:3900-3907), where conference.c applied them before it
- * (conference.c:3238-3243). So they take effect one frame (20 ms) later.
+ * What an application can observe is timing. The parallel bridge applies
+ * queued connect/disconnect/remove operations after the tick's mix
+ * (conf_thread.c:3900-3907), where conference.c applied them before it
+ * (conference.c:3238-3243), so they take effect one frame (20 ms) later. And a
+ * hangup's BYE now leaves before the call's port has left the bridge; on
+ * 0.2.1 it left after. In a live suite four calls tore down in 11 ms instead of
+ * ~330 ms, while each call slot stays taken until its BYE transaction ends, so
+ * a call placed right after a mass hangup can meet PJ_ETOOMANY.
  * Pinning PJMEDIA_CONF_SERIAL_BRIDGE_BACKEND would keep the old file at the
  * cost of running a backend upstream no longer defaults to. */
 

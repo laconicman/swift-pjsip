@@ -53,9 +53,17 @@ for no worker threads and the bridge runs non-parallel: mixing stays in the soun
 `get_frame()` thread, and the new `pjsua_media_config.conf_thread_prio` (applied to worker threads
 only) has nothing to act on.
 
-The behaviour an application can observe changes in one place. Queued connect, disconnect and
-remove operations are applied after the tick's mix rather than before it, so a mute (a
-disconnect from slot 0) takes effect one 20 ms frame later. Pinning
+What an application can observe is timing, in two places:
+
+- Queued connect, disconnect and remove operations are applied after the tick's mix rather than
+  before it, so a mute (a disconnect from slot 0) takes effect one 20 ms frame later.
+- A hangup's BYE now goes out before the call's port has left the bridge; on 0.2.1 it went out
+  after. In the Offhook live suite, four calls tore down in 11 ms where they had taken ~330 ms.
+  A call slot stays taken until its BYE transaction ends, though, so a call placed in the same
+  instant can meet `PJ_ETOOMANY`. That is how the suite found this: a test dialling right after
+  another had filled the call table started failing.
+
+Pinning
 `PJMEDIA_CONF_SERIAL_BRIDGE_BACKEND` would keep the old file, at the cost of running a backend
 upstream no longer defaults to; we do not.
 The line-level reasoning is in `scripts/config_site-ios.h`.
