@@ -17,7 +17,7 @@
  * here for a year silently breaking every authenticated call over UDP.
  * A comment that names the tradeoff would have caught it.
  *
- * Line references are pjproject master @ 288de6142 (2026-08-19).
+ * Line references are pjproject master @ bd69054a6 (2026-10-09).
  */
 
 /* ---------------------------------------------------------------------------
@@ -52,7 +52,7 @@
  * clear that bar, and both say so where they are set.
  * ------------------------------------------------------------------------- */
 
-/* Accounts: whatever upstream defaults to (pjsua.h:3969, 8 as of 2.17/master);
+/* Accounts: whatever upstream defaults to (pjsua.h:4079, 8 as of 2.17/master);
  * the preset cuts it to 4.
  *
  * WHY: 4 is the whole account table, so the live SIP test suite could not add
@@ -60,14 +60,14 @@
  * default is already enough — the preset is the only thing in the way.
  *
  * COST: pjsua_var.acc[] is a FIXED array inside the pjsua_data singleton
- * (pjsua_internal.h:619-623) and init_data() walks all of it at startup, so
+ * (pjsua_internal.h:677-678) and init_data() walks all of it at startup, so
  * four extra pjsua_acc entries are paid unconditionally, even with one account
- * configured. Measured against this build: sizeof(pjsua_acc) = 7160 B, so
- * +4 accounts = +28 KB, and sizeof(pjsua_data) is 106568 B in total.
+ * configured. Measured against this build: sizeof(pjsua_acc) = 7168 B, so
+ * +4 accounts = +28 KB, and sizeof(pjsua_data) is 106672 B in total.
  */
 #undef  PJSUA_MAX_ACC
 
-/* 8 simultaneous calls (the preset AND upstream both say 4 — pjsua.h:5928 —
+/* 8 simultaneous calls (the preset AND upstream both say 4 — pjsua.h:6071 —
  * so this is a departure from upstream, not a restoration, and the only
  * literal in this section).
  *
@@ -78,15 +78,16 @@
  * line would hold us at 8 until someone edits it.
  *
  * COST: unlike PJSUA_MAX_ACC this is only a ceiling — pjsua_var.calls is
- * pool-allocated at pjsua_init() to ua_cfg.max_calls (pjsua_core.c:110-122),
- * which pjsua_config_default() sets to this macro. Measured sizeof(pjsua_call)
- * = 22056 B, so leaving the default costs +86 KB. An app that wants the old
+ * pool-allocated at pjsua_init() to ua_cfg.max_calls (pjsua_call.c:240-245),
+ * which pjsua_config_default() sets to this macro (pjsua_core.c:115).
+ * Measured sizeof(pjsua_call) = 22320 B, so leaving the default costs
+ * +87 KB. An app that wants the old
  * footprint can lower max_calls at runtime; it cannot raise it past this.
  */
 #undef  PJSUA_MAX_CALLS
 #define PJSUA_MAX_CALLS 8
 
-/* Conference slots: whatever upstream defaults to (pjsua.h:7980, 254 as of
+/* Conference slots: whatever upstream defaults to (pjsua.h:8256, 254 as of
  * 2.17/master).
  *
  * WHY: this — not PJSUA_MAX_CALLS — is the real ceiling on a locally mixed
@@ -95,24 +96,25 @@
  * occupies a slot. Handing it back to upstream beats inventing a number.
  *
  * Note the macro is only the DEFAULT for pjsua_media_config.max_media_ports
- * (pjsua_core.c:442), and that runtime field is what actually sizes the bridge
- * (passed as param.max_slots, pjsua_aud.c:340). The two must nevertheless
+ * (pjsua_core.c:450), and that runtime field is what actually sizes the bridge
+ * (passed as param.max_slots, pjsua_aud.c:342). The two must nevertheless
  * agree, because pjsua_conf_get_active_ports() enumerates into a fixed
- * `unsigned ports[PJSUA_MAX_CONF_PORTS]` (pjsua_aud.c:870) — safe, since the
+ * `unsigned ports[PJSUA_MAX_CONF_PORTS]` (pjsua_aud.c:934) — safe, since the
  * array size bounds the enumeration, but it silently UNDER-REPORTS once the
  * live bridge is larger than the compile-time value.
  *
- * COST: 8 bytes per unused slot in conf->ports (conference.c:801), plus
+ * COST: 8 bytes per unused slot in conf->ports (conf_thread.c:1114-1116), plus
  * max_ports*8 bytes per LIVE port for its listener_slots/listener_adj_level
- * arrays (conference.c:460-468) — ~2 KB per live port at 254. The mixing hot
- * loop is bounded by port_cnt, not max_ports (conference.c:2773), so idle
- * slots cost no CPU.
+ * arrays (conf_thread.c:711-718) — ~2 KB per live port at 254. The mixing hot
+ * loop walks the active ports only, not max_ports (conf_thread.c:4056), so
+ * idle slots cost no CPU. (conf_thread.c, not conference.c: see the
+ * PJMEDIA_CONF_BACKEND note below.)
  */
 #undef  PJSUA_MAX_CONF_PORTS
 
 /* PJSIP_MAX_TSX_COUNT / PJSIP_MAX_DIALOG_COUNT stay at the preset's 31.
  * They look like caps but are pj_hash_create() bucket counts (hash.c:89-120,
- * sip_transaction.c:531): entries chain, nothing is ever rejected, and the
+ * sip_transaction.c:534): entries chain, nothing is ever rejected, and the
  * only consequence at 8 calls + 8 registering accounts is slightly longer
  * collision chains. PJSIP_MAX_TIMER_COUNT derives from them for its INITIAL
  * timer-heap size and resizes itself. Left alone deliberately. */
@@ -152,7 +154,7 @@
 
 /* Voice-activity-driven ducking of other audio while VoiceProcessingIO is
  * running, instead of a fixed duck for the whole call. Upstream default is 0
- * (pjmedia-audiodev/config.h:152) and config_site_sample.h already turns it on
+ * (pjmedia-audiodev/config.h:153) and config_site_sample.h already turns it on
  * for iOS; set explicitly because the macOS slice must NOT inherit it — the
  * maintainer deliberately left macOS on the old behaviour when merging our
  * pjproject#5178. Requires iOS 17 / macOS 14; a no-op below that.
@@ -185,6 +187,16 @@
  * WHY: real-world INVITEs with a full video SDP, ICE candidates, long Route
  * sets and Authorization headers exceed 4 KB, and PJSIP_MAX_PKT_LEN is a hard
  * truncation point, not a soft one.
+ * It bounds received messages too: rdata's packet buffer is
+ * char[PJSIP_MAX_PKT_LEN] (sip_transport.h:360), and a TCP message that fills
+ * it is dropped with PJSIP_ERXOVERFLOW, the rest of the stream with it
+ * (sip_transport.c:2268-2275). A REGISTER 200 lists every binding of the AOR,
+ * and with long +sip.instance values that grows fast: in a lab run, a 200
+ * that still listed the bindings of a length test (instance values of up to
+ * 2048 characters, ~4.3 KB together) came to ~4.7 KB and was lost at
+ * upstream's 4000, so the registration timed out with 408. 16000 covers
+ * that with room to spare; realistic UUID instance values (~47 bytes) do not
+ * come close.
  * COST: this is a per-transport receive-buffer size — it is ABI, and it is
  * why a consumer must never override this header. */
 #define PJSIP_MAX_PKT_LEN 16000
@@ -207,6 +219,22 @@
  * behind the 126 s transport-death detection measured in
  * swift-pjsua/docs/Call-Termination-Paths.md §4.1 — changing it at build time
  * silently moves a number other documents quote. */
+
+/* PJMEDIA_CONF_BACKEND and PJMEDIA_CONF_THREADS are deliberately left at their
+ * defaults. Since pjproject#5297 the default backend is the parallel bridge
+ * (conf_thread.c) wherever there are threads, so this slice no longer builds
+ * conference.c. PJMEDIA_CONF_THREADS defaults to 1 under TARGET_OS_IPHONE
+ * (pjmedia/config.h:178-188), so pjsua passes worker_threads 0
+ * (pjsua_aud.c:348) and the bridge runs with is_parallel false
+ * (conf_thread.c:1108): no worker threads are created, mixing stays in the
+ * sound device's get_frame() thread, and conf_thread_prio, which only applies
+ * to workers, does nothing.
+ * The one observable difference from conference.c is ordering: the parallel
+ * bridge applies queued connect/disconnect/remove operations after the tick's
+ * mix (conf_thread.c:3900-3907), where conference.c applied them before it
+ * (conference.c:3238-3243). So they take effect one frame (20 ms) later.
+ * Pinning PJMEDIA_CONF_SERIAL_BRIDGE_BACKEND would keep the old file at the
+ * cost of running a backend upstream no longer defaults to. */
 
 /* ---------------------------------------------------------------------------
  * Deliberately NOT enabled — reasoning in docs/Build-Time-Feature-Gates.md
