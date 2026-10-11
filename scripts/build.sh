@@ -73,6 +73,12 @@ get_target_sdk() {
 # Idempotent: a reverse dry-run that succeeds means the hunk is already in
 # the tree, so re-running a phase over an already-patched tree is a no-op.
 apply_patches() {
+    # Truncate before any early return: `notes` reports whatever this file
+    # holds, so an unpatched build in a reused build root would otherwise
+    # publish the previous build's patch list.
+    mkdir -p "${META_DIR}"
+    : > "${META_DIR}/patches.txt"
+
     if [[ ! -d "${PATCHES_DIR}" ]]; then
         log_info "No patches directory (${PATCHES_DIR}) — building unpatched upstream."
         return 0
@@ -88,9 +94,6 @@ apply_patches() {
         log_warn "${PATCHES_DIR} contains no *.patch — building unpatched upstream."
         return 0
     fi
-
-    mkdir -p "${META_DIR}"
-    : > "${META_DIR}/patches.txt"
 
     local p name
     for p in "${patches[@]}"; do
