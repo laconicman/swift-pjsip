@@ -294,6 +294,9 @@ verify_headers() {
 
     report "PJSIP-umbrella.h present"  "PJSIP-umbrella.h missing"  test -f "$headers/PJSIP-umbrella.h"
     report "PJSUA2-umbrella.h present" "PJSUA2-umbrella.h missing" test -f "$headers/PJSUA2-umbrella.h"
+    report "PJSIP-errno-swift.h present and included by the umbrella" \
+           "PJSIP-errno-swift.h missing, or not included by PJSIP-umbrella.h" \
+           grep -q '#include <PJSIP-errno-swift.h>' "$headers/PJSIP-umbrella.h"
 
     # The macOS case-insensitivity trap: a generated header whose name
     # case-folds onto a vendored one (PJSIP.h vs pjsip.h) silently clobbers it.
@@ -438,6 +441,27 @@ verify_typecheck() {
         pass "import PJSIP + pjsua_create() typechecks"
     else
         fail "import PJSIP failed to typecheck: $(head -3 "$TMP/c.err" | tr '\n' ' ')"
+    fi
+
+    # Every status code build.sh exported must be visible to Swift by the macro's
+    # own name, as a pj_status_t. The importer drops the macros themselves,
+    # which is why the export exists; an ambiguity error
+    # here means a newer Swift has started importing them and the export can go.
+    local errno_h="$headers/PJSIP-errno-swift.h" errno_count
+    if [[ -f "$errno_h" ]]; then
+        {
+            echo 'import PJSIP'
+            sed -nE 's/.*swift_name\("([A-Z0-9_]+)"\).*/let _: pj_status_t = \1/p' "$errno_h"
+        } > "$TMP/errno.swift"
+        errno_count="$(grep -c '^let ' "$TMP/errno.swift" || true)"
+        if [[ "$errno_count" -gt 0 ]] && grep -qx 'let _: pj_status_t = PJSIP_EBUSY' "$TMP/errno.swift" \
+            && xcrun --sdk iphonesimulator swiftc -target "$target" -I "$headers" -typecheck "$TMP/errno.swift" 2> "$TMP/errno.err"; then
+            pass "$errno_count sip_errno.h status codes visible to Swift, PJSIP_EBUSY among them"
+        else
+            fail "sip_errno.h status codes not visible to Swift: $(head -3 "$TMP/errno.err" 2>/dev/null | tr '\n' ' ')"
+        fi
+    else
+        fail "PJSIP-errno-swift.h missing — Swift cannot name PJSIP_EBUSY"
     fi
 
     printf 'import PJSUA2\n' > "$TMP/cpp.swift"

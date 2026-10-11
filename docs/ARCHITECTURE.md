@@ -125,6 +125,29 @@ Generated umbrella files are suffixed (`PJSIP-umbrella.h`) because macOS
 filesystems are case-insensitive: a generated `PJSIP.h` would silently overwrite
 PJSIP's own `pjsip.h`.
 
+**The module also carries Swift names for the `sip_errno.h` status codes** (since
+0.3.0). `PJSIP_EBUSY` is `(PJSIP_ERRNO_START_PJSIP + 1)`, and `PJSIP_ERRNO_START_PJSIP`
+is itself `(PJSIP_ERRNO_START + 1000)`. Swift's Clang importer imports
+`PJSIP_ERRNO_START` but drops `PJSIP_ERRNO_START_PJSIP` and every code defined from
+it, so a Swift consumer could not name `PJSIP_EBUSY`. Measured on 0.2.1 by type-checking
+every status macro: 78 of the 79 in `sip_errno.h` are missing from Swift, while every
+`pj/errno.h` code imports, although those are also arithmetic on other macros. `build.sh` therefore generates `PJSIP-errno-swift.h` from
+the header it ships and includes it from the umbrella. Each code there becomes a typed
+constant, renamed for Swift to the macro's own name:
+
+```c
+static const pj_status_t pjsip_swift_PJSIP_EBUSY __attribute__((swift_name("PJSIP_EBUSY"))) = PJSIP_EBUSY;
+```
+
+Swift sees `PJSIP_EBUSY: pj_status_t`, and the value folds to a constant at compile
+time. C and C++ see only the prefixed name, because a declaration cannot reuse the
+name of a macro. The importer drops other families for the same reason (pjnath,
+pjlib-util, pjsip-simple, the audio/video device codes, five pjmedia codes); they are
+not exported yet. `verify-xcframework.sh --typecheck`, which the build's own verify
+step runs, compiles every exported name from Swift. If a future Swift starts
+importing the macros themselves, that check fails on the ambiguity, which is the cue
+to drop the export.
+
 ### 5. `config_site.h` ships inside the artifact — and is the ABI
 
 The binary is compiled against one specific `config_site.h`. Its constants
