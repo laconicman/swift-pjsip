@@ -12,6 +12,8 @@ code behind it was never compiled.
 directly. Line numbers are that commit. Established 2026-08-17 by the call-quality and
 call-lifecycle passes (`../../swift-pjsua/docs/Call-Termination-Paths.md`,
 `../../offhook/docs/Call-Quality-Statistics.md`).
+Re-checked for `0.3.0` against master `bd69054a6` (2026-10-09): none of the gates below changed
+its default. What did change is the conference bridge, below.
 
 ---
 
@@ -41,6 +43,34 @@ So the capacity block sets exactly two numbers and hands the rest back:
 
 The bare `#undef` matters because `pjsua.h` guards each of these with `#ifndef` — undoing the preset
 and stopping there inherits upstream's number, today's and tomorrow's.
+
+### Left at upstream's default, and changed by upstream: the conference bridge
+
+From `0.3.0` the artifact mixes audio in `conf_thread.c`, not `conference.c`.
+[pjproject#5297](https://github.com/pjsip/pjproject/pull/5297) made the parallel bridge the default
+backend wherever there are threads. On iOS, `PJMEDIA_CONF_THREADS` defaults to 1, so pjsua asks
+for no worker threads and the bridge runs non-parallel: mixing stays in the sound device's
+`get_frame()` thread, and the new `pjsua_media_config.conf_thread_prio` (applied to worker threads
+only) has nothing to act on.
+
+The behaviour an application can observe changes in one place. Queued connect, disconnect and
+remove operations are applied after the tick's mix rather than before it, so a mute (a
+disconnect from slot 0) takes effect one 20 ms frame later. Pinning
+`PJMEDIA_CONF_SERIAL_BRIDGE_BACKEND` would keep the old file, at the cost of running a backend
+upstream no longer defaults to; we do not.
+The line-level reasoning is in `scripts/config_site-ios.h`.
+
+### Compiled in since `0.3.0`, off unless the application turns them on
+
+Not build gates, but easy to mistake for features the binary lacks:
+
+- **Server failover** (`PJSIP_SERVER_FAILOVER`, default 0; runtime `pjsip_cfg()` setting):
+  remember failed servers and retry a request that gets no answer or a 503 on the next address
+  ([pjproject#5293](https://github.com/pjsip/pjproject/pull/5293)).
+- **System-resolver fallback** (`PJ_DNS_RESOLVER_SYS_FALLBACK`, default off;
+  `pj_dns_settings.sys_fallback`): resolve A/AAAA with `getaddrinfo()` while no nameserver
+  answers ([pjproject#5303](https://github.com/pjsip/pjproject/pull/5303)). When on, it runs lookups
+  in up to `PJ_DNS_RESOLVER_SYS_FALLBACK_THREADS` (4) resolver threads.
 
 Everything below is **not** set, and inherits an upstream default of `0`.
 
