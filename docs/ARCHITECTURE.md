@@ -413,7 +413,7 @@ already does.
 
 Rebuild and re-release from source when you want the artifact to decide *differently*:
 your own codec set (Opus, a licensed IPP G.729 — [Codec-Coverage.md](./Codec-Coverage.md)),
-your own patches on top of pjproject (this build carries one), OpenSSL instead of the
+your own patches on top of pjproject (`scripts/patches/` applies them), OpenSSL instead of the
 Darwin TLS backend, platforms or slices this one does not ship, other `config_site`
 capacities — anything in [Build-Time-Feature-Gates.md](./Build-Time-Feature-Gates.md),
 since those are compiled in and no consumer can change them afterwards. Or simply because
