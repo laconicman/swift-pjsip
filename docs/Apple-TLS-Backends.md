@@ -25,6 +25,33 @@ neither is a rename of the other.
 right choice and should not be changed casually: the Darwin/Secure Transport backend sits
 on an API Apple deprecated in 2019, and it carries live defects (below).
 
+### "darwin" means the opposite in pjmedia — do not carry the inference across
+
+The table above teaches a rule that is true here and false one directory away: in pjlib's TLS
+code `darwin` is the legacy backend and `apple` is the modern one. In pjmedia's video device
+layer the same word marks the **current** implementation.
+
+| file | wraps | status |
+|---|---|---|
+| `pjlib/src/pj/ssl_sock_darwin.c` | Secure Transport | deprecated since 2019 |
+| `pjmedia/src/pjmedia-videodev/darwin_dev.m` | **AVFoundation** | current, and the only live capture path |
+| `pjmedia/src/pjmedia-videodev/qt_dev.m` | QTKit | the legacy one — `PJMEDIA_VIDEO_DEV_HAS_QT` defaults to `0` |
+
+So pjmedia has the same legacy/modern split, with the naming inverted: `qt` is old and `darwin`
+is new. Anyone arriving from the TLS work — where "darwin" reliably means "the deprecated one" —
+will read `darwin_dev.m` as legacy and be wrong about the file that captures every frame we send.
+
+`darwin_dev.m` is also the odd one out in its own directory, where the convention is to name a
+backend after the API it wraps rather than after the OS: `coreaudio_dev.m`, `dshow_dev.c`,
+`v4l2_dev.c`, `metal_dev.m`, `opengl_dev.c`, `qt_dev.m`. By that rule it would be `avf_dev.m`,
+the exact analogue of `coreaudio_dev.m` in the sibling audio directory.
+
+We are not proposing that rename upstream. `PJMEDIA_VIDEO_DEV_HAS_DARWIN` is a user-visible
+build knob, so renaming it would hand anyone who sets it a silent build with no camera rather
+than an error — a poor trade for a naming improvement. If it is ever worth raising it belongs in
+a major version and has to be additive: introduce `PJMEDIA_VIDEO_DEV_HAS_AVF`, keep the old macro
+working as an alias, rename the file, and drop the alias a release later.
+
 ## Selecting a backend
 
 `./configure` **cannot select either backend** on a current SDK. This is worth knowing
