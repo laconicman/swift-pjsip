@@ -183,13 +183,19 @@ Constraints to design around:
   through this API. It would need a custom verify block, which the Apple backend uses
   internally but does not expose through `pj_ssl_sock_param`.
 
-### Certificate parsing is not hardened — assume peer certs can crash it
+### Certificate parsing: hardened since 0.3.0, still untrusted input
 
 This matters specifically for pinning, because pinning means deliberately accepting
 connections from peers whose certificates you have not vetted, and then inspecting them.
 `get_cert_info()` runs on **every completed handshake**, against the **peer's**
-certificate, and as of pjproject master it has four unguarded paths (all found in review
-of pjproject#5224, none fixed at time of writing):
+certificate. **Through 0.2.1** it had four unguarded paths, all found in review of
+pjproject#5224. **pjproject#5282 fixed all four and the leak below, and it is in the artefact
+since 0.3.0**: on master `bd69054a6` the `SecCertificateCopyValues()` result is NULL-checked
+before use, the subject comes from its OID with type guards instead of
+`SecCertificateCopySubjectSummary()`, the SAN array is NULL-, type- and count-checked, an
+over-length serial is flagged as truncated rather than over-read, and refreshed cert info is
+allocated from a pool that is reset, so renegotiations no longer leak. The table is what
+0.2.1 shipped:
 
 | what | trigger | effect |
 |---|---|---|
@@ -203,20 +209,21 @@ issuers routinely emit leaves with an empty subject and everything in the SAN �
 one is not an exotic edge case. And an over-length serial is emitted by some
 non-conforming CAs.
 
-Practical consequence: treat the peer certificate as attacker-controlled input that the
-library does not fully validate before parsing. If we ever expose pinning to a
-counterparty we do not control, we want these fixed upstream first, or we want to avoid
-reading `pj_ssl_cert_info` for peers we do not trust.
+Through 0.2.1 there was also a per-renegotiation leak: `get_cert_info()`'s "nothing changed"
+early return freed one CoreFoundation object and not the other two, so a long-lived TLS
+connection leaked a `CFData` (and on macOS a `CFString`) on every renegotiation.
 
-There is also a per-renegotiation leak: `get_cert_info()`'s "nothing changed" early return
-frees one CoreFoundation object and not the other two, so a long-lived TLS connection
-leaks a `CFData` (and on macOS a `CFString`) on every renegotiation.
+Practical consequence, unchanged by the fixes: treat the peer certificate as
+attacker-controlled input. The known crash paths are closed, but the parser is hand-written
+CoreFoundation walking, and this repository has no fuzzing of it. If we ever expose pinning to
+a counterparty we do not control, prefer not reading `pj_ssl_cert_info` for peers we do not
+trust.
 
 ### Certificate files are read into memory with a hand-rolled loop
 
 Only the Apple backends read certificate files themselves; OpenSSL, GnuTLS and mbedTLS all
 hand the path to the TLS library. The Apple helper originally truncated at 8 KB
-(pjproject#5222 fixes that), and the fix has to be careful not to become unbounded — a
+(pjproject#5222 fixes that; in the artefact since 0.3.0), and the fix has to be careful not to become unbounded — a
 `cert_file` pointing at a FIFO or `/dev/zero` would otherwise hang or exhaust memory on
 the `pj_ssl_sock_start_accept()` path. Keep certificate paths under our own control and
 pointing at regular files.
@@ -235,7 +242,7 @@ API on 11 Oct 2026.** Everything marked merged is in the artefact since `0.3.0` 
 | Apple TLS backends unbuildable via CMake (`FATAL_ERROR "TODO"`) | both | **merged** (#5223) |
 | `apple` + non-select ioqueue builds but never connects | Apple | **merged** (#5230) — now a compile-time rejection |
 | `--enable-darwin-ssl` no-op; neither backend selectable from configure | build system | fix **merged** (#5221); issue #5217 still open as the register |
-| Certificate code duplicated between the two backends, copies diverged | both | dedup **merged** (#5224, #5226); issue #5215 still open |
+| Certificate code duplicated between the two backends, copies diverged | both | dedup **merged** (#5224, #5226); issue #5215 closed 2026-09-09 |
 | Unguarded paths in `get_cert_info()` + the per-renegotiation leak | both | **merged** (#5282, for #5232 §1–3) |
 | TLS version bounds discarded by the Darwin backend | Darwin | **merged** (#5234, #5232 §4) |
 | `restart2()` returns `PJ_SUCCESS` without restarting a downed listener | TCP and TLS transports | **merged** (#5233, #5232 §5) |
