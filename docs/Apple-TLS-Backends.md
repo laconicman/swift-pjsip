@@ -89,8 +89,8 @@ never drained. There is no runtime error; connections simply hang.
 We are safe today because our `config_site.h` does not override `PJ_IOQUEUE_IMP`, and
 `config.h:752` defaults it to `PJ_IOQUEUE_IMP_SELECT`. **Do not "optimise" that to kqueue.**
 If anyone is tempted, the whole reason is above. Upstream has been asked for a compile-time
-`#error` on the combination, and **got it — pjproject#5230, merged.** It is not in our pinned
-binary, so until a rebuild this doc is still the guard.
+`#error` on the combination, and **got it — pjproject#5230, merged.** It is in the artefact
+since `0.3.0`, so a kqueue override now fails to compile instead of hanging at run time.
 
 ## Where the certificate gets loaded: eager vs lazy
 
@@ -174,21 +174,28 @@ Constraints to design around:
 - **One anchor, not a bundle.** The code builds a one-element anchor array from a single
   certificate. Pinning to a chain or rotating between two anchors is not expressible
   through this path as written.
-- **Keep the CA file under 8 KB.** `create_data_from_file()` reads with a single
-  `CFReadStreamRead()` into a fixed `UInt8[8192]` and treats whatever it gets as the whole
-  file. Larger files are silently truncated and then fail as "unparsable". This affects
-  the CA path as well as the certificate path. See the upstream issue below.
+- **Before `0.3.0`, keep the CA file under 8 KB.** Through `0.2.1`, `create_data_from_file()`
+  read with a single `CFReadStreamRead()` into a fixed `UInt8[8192]` and treated whatever it
+  got as the whole file. Larger files were silently truncated and then failed as "unparsable",
+  on the CA path as well as the certificate path. pjproject#5222 reads the whole file; it is
+  in the artefact since `0.3.0`.
 - Leaf-key pinning (pin the public key rather than the anchor) is **not** available
   through this API. It would need a custom verify block, which the Apple backend uses
   internally but does not expose through `pj_ssl_sock_param`.
 
-### Certificate parsing is not hardened — assume peer certs can crash it
+### Certificate parsing: hardened since 0.3.0, still untrusted input
 
 This matters specifically for pinning, because pinning means deliberately accepting
 connections from peers whose certificates you have not vetted, and then inspecting them.
 `get_cert_info()` runs on **every completed handshake**, against the **peer's**
-certificate, and as of pjproject master it has four unguarded paths (all found in review
-of pjproject#5224, none fixed at time of writing):
+certificate. **Through 0.2.1** it had four unguarded paths, all found in review of
+pjproject#5224. **pjproject#5282 fixed all four and the leak below, and it is in the artefact
+since 0.3.0**: on master `bd69054a6` the `SecCertificateCopyValues()` result is NULL-checked
+before use, the subject comes from its OID with type guards instead of
+`SecCertificateCopySubjectSummary()`, the SAN array is NULL-, type- and count-checked, an
+over-length serial is flagged as truncated rather than over-read, and refreshed cert info is
+allocated from a pool that is reset, so renegotiations no longer leak. The table is what
+0.2.1 shipped:
 
 | what | trigger | effect |
 |---|---|---|
@@ -202,20 +209,21 @@ issuers routinely emit leaves with an empty subject and everything in the SAN �
 one is not an exotic edge case. And an over-length serial is emitted by some
 non-conforming CAs.
 
-Practical consequence: treat the peer certificate as attacker-controlled input that the
-library does not fully validate before parsing. If we ever expose pinning to a
-counterparty we do not control, we want these fixed upstream first, or we want to avoid
-reading `pj_ssl_cert_info` for peers we do not trust.
+Through 0.2.1 there was also a per-renegotiation leak: `get_cert_info()`'s "nothing changed"
+early return freed one CoreFoundation object and not the other two, so a long-lived TLS
+connection leaked a `CFData` (and on macOS a `CFString`) on every renegotiation.
 
-There is also a per-renegotiation leak: `get_cert_info()`'s "nothing changed" early return
-frees one CoreFoundation object and not the other two, so a long-lived TLS connection
-leaks a `CFData` (and on macOS a `CFString`) on every renegotiation.
+Practical consequence, unchanged by the fixes: treat the peer certificate as
+attacker-controlled input. The known crash paths are closed, but the parser is hand-written
+CoreFoundation walking, and this repository has no fuzzing of it. If we ever expose pinning to
+a counterparty we do not control, prefer not reading `pj_ssl_cert_info` for peers we do not
+trust.
 
 ### Certificate files are read into memory with a hand-rolled loop
 
 Only the Apple backends read certificate files themselves; OpenSSL, GnuTLS and mbedTLS all
 hand the path to the TLS library. The Apple helper originally truncated at 8 KB
-(pjproject#5222 fixes that), and the fix has to be careful not to become unbounded — a
+(pjproject#5222 fixes that; in the artefact since 0.3.0), and the fix has to be careful not to become unbounded — a
 `cert_file` pointing at a FIFO or `/dev/zero` would otherwise hang or exhaust memory on
 the `pj_ssl_sock_start_accept()` path. Keep certificate paths under our own control and
 pointing at regular files.
@@ -223,7 +231,8 @@ pointing at regular files.
 ## Known defects, upstream status
 
 Everything below was found while tracing this. **Statuses re-checked against the pjsip/pjproject
-API on 2 Sep 2026** — the whole PR series has since merged.
+API on 11 Oct 2026.** Everything marked merged is in the artefact since `0.3.0` (master
+`bd69054a6`).
 
 | what | affects | upstream status |
 |---|---|---|
@@ -233,30 +242,29 @@ API on 2 Sep 2026** — the whole PR series has since merged.
 | Apple TLS backends unbuildable via CMake (`FATAL_ERROR "TODO"`) | both | **merged** (#5223) |
 | `apple` + non-select ioqueue builds but never connects | Apple | **merged** (#5230) — now a compile-time rejection |
 | `--enable-darwin-ssl` no-op; neither backend selectable from configure | build system | fix **merged** (#5221); issue #5217 still open as the register |
-| Certificate code duplicated between the two backends, copies diverged | both | dedup **merged** (#5224, #5226); issue #5215 still open |
-| Unguarded paths in `get_cert_info()` + the per-renegotiation leak | both | **open** — follow-up to #5224, registered as #5232 §1 |
-| `restart2()` returns `PJ_SUCCESS` without restarting a downed listener | TLS transport, both backends | **open** (#5232 §5) |
-| `restart2()` has no `cert_direct` branch although listener start does | TLS transport, both backends | **open** (#5232 §6) |
+| Certificate code duplicated between the two backends, copies diverged | both | dedup **merged** (#5224, #5226); issue #5215 closed 2026-09-09 |
+| Unguarded paths in `get_cert_info()` + the per-renegotiation leak | both | **merged** (#5282, for #5232 §1–3) |
+| TLS version bounds discarded by the Darwin backend | Darwin | **merged** (#5234, #5232 §4) |
+| `restart2()` returns `PJ_SUCCESS` without restarting a downed listener | TCP and TLS transports | **merged** (#5233, #5232 §5) |
+| `restart2()` has no `cert_direct` branch although listener start does | TLS transport, both backends | #5233's single credential loader covers `cert_direct` too; not separately confirmed against #5232 §6 |
 | iOS import failures logged as `SecItemImport`, but iOS uses `SecPKCS12Import` | Apple | **open** (#5232 §7) |
 
 The last three came out of building runtime TLS tests against the shipped backend rather than
 from reading it — see `swift-pjsua/docs/Tech-Debt.md` TD-19 and TD-22.
 
-> ### Merged upstream is not shipped here
+> ### Merged upstream is shipped here since 0.3.0
 >
-> **Read this row of the table as "fixed for whoever builds master", not "fixed for us."** Our
-> binary is pinned at PJSIP 2.17.0 (`288de6142`), which predates every one of those merges. So
-> the 8 KB truncation is **still live in the artefact this package distributes**, and stays live
-> until a rebuild: keep certificate and CA files under 8 KB. `swift-pjsua`'s
-> `TLSTransportTests.testOversizedPKCS12StillFailsToLoad` is the detector — it asserts the
-> *failure*, so it goes red on the rebuild that picks #5222 up, which is the signal to lift the
-> ceiling here and in that test.
+> Through `0.2.1` the binary was PJSIP 2.17.0 (`288de6142`), which predates every merge in the
+> table, so "merged" meant "fixed for whoever builds master", not "fixed for us". `0.3.0` is built
+> from master `bd69054a6` and carries all of them. The 8 KB truncation is gone with it, and
+> `swift-pjsua`'s oversized-PKCS#12 test, which asserted the failure as a detector, now asserts
+> that the file loads.
 
 **Bottom line for us:** we ship the Apple/Network.framework backend — the one without the crash,
-and the one that already validated eagerly. Against the pinned binary, three things still bite:
-the 8 KB truncation, the `get_cert_info()` robustness gaps if we ever pin against untrusted
-peers, and the select-ioqueue constraint. A rebuild retires the first and the third; the second
-is still open upstream.
+and the one that already validated eagerly. Since `0.3.0` the 8 KB truncation and the
+`get_cert_info()` gaps are fixed in the artefact, and a non-select ioqueue no longer compiles. What
+is left upstream is a misleading log label (#5232 §7) and an unlocked credential swap during a
+listener restart, which #5233 names as a known follow-up.
 
 ## The lesson worth keeping
 
