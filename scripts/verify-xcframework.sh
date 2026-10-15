@@ -20,7 +20,8 @@
 #
 #   --typecheck additionally compiles `import PJSIP` / `import PJSUA2` against
 #   the xcframework headers with swiftc — the closest no-app approximation of
-#   what SwiftPM does in a consumer build.
+#   what SwiftPM does in a consumer build — and names every status code the
+#   errno headers define from Swift.
 #
 # Standalone on purpose: point it at any unpacked PJSIP.xcframework — a release
 # asset, a build output — with no build state. Needs macOS (xcrun, nm, otool, lipo).
@@ -44,9 +45,9 @@ while [[ $# -gt 0 ]]; do
         --expect-min-ios=*) EXPECT_MIN_IOS="${1#*=}"; shift ;;
         --quiet)            QUIET=1; shift ;;
         --typecheck)        TYPECHECK=1; shift ;;
-        # 26 = the header block above, which ends at `set -euo pipefail`. Keep this in
+        # 27 = the header block above, which ends at `set -euo pipefail`. Keep this in
         # step with it, or --help starts printing the helper functions' comments.
-        -h|--help)          grep '^#' "$0" | sed 's/^# \{0,1\}//' | head -26; exit 0 ;;
+        -h|--help)          grep '^#' "$0" | sed 's/^# \{0,1\}//' | head -27; exit 0 ;;
         *)                  XCF="$1"; shift ;;
     esac
 done
@@ -431,6 +432,82 @@ verify_signature() {
 # Optional: typecheck the modules like a SwiftPM consumer would
 # ---------------------------------------------------------------------------
 
+# Every status code the eight errno headers define must be nameable from Swift as
+# a pj_status_t, whether the importer brings the macro in itself or build.sh's
+# PJSIP-errno-swift.h exports it. The codes are enumerated here, the same way
+# build.sh does it but independently: names read back from the generated header
+# would only check the header against itself, and could not notice a family it
+# leaves out. "cannot find" means the export misses a code; "ambiguous use"
+# means this Swift imports a macro the export also names, i.e. a toolchain newer
+# than the build's, and the export has to drop it.
+verify_status_codes() {
+    local headers="$1" target="$2"
+    local errno_headers=(pj/errno.h pjlib-util/errno.h pjnath/errno.h pjmedia/errno.h
+                         pjmedia-audiodev/errno.h pjmedia-videodev/errno.h
+                         pjsip/sip_errno.h pjsip-simple/errno.h)
+
+    { echo '#define PJ_AUTOCONF 1'; printf '#include <%s>\n' "${errno_headers[@]}"; } > "$TMP/errno-all.c"
+    if ! xcrun --sdk iphonesimulator clang -target "$target" -I "$headers" -E -dD \
+        "$TMP/errno-all.c" > "$TMP/errno-all.i" 2> "$TMP/errno-all.err"; then
+        fail "could not preprocess the errno headers: $(head -3 "$TMP/errno-all.err" | tr '\n' ' ')"
+        return
+    fi
+    # Object-like macros whose line marker is one of the eight headers, minus
+    # range bounds, sizes and include guards.
+    awk -v root="$headers/" -v files="${errno_headers[*]}" '
+        BEGIN { n = split(files, list, " "); for (i = 1; i <= n; i++) wanted[root list[i]] }
+        /^# [0-9]+ "/ { file = $0; sub(/^# [0-9]+ "/, "", file); sub(/".*/, "", file); next }
+        /^#define [A-Za-z_][A-Za-z0-9_]* / && (file in wanted) { print $2 }
+    ' "$TMP/errno-all.i" \
+        | { grep -vE '(_ERRNO_START|_ERRNO_END|_ERROR_START|_ERROR_END|_RCODE_START|_SPACE_SIZE|_MSG_SIZE|_BUF_SIZE|_H__)$|^PJ_STRERROR_USE_' || true; } \
+        > "$TMP/errno-codes"
+
+    # One code per family that must be among them, so a broken enumeration
+    # cannot pass by typechecking nothing.
+    local sentinel absent=""
+    for sentinel in PJSIP_EBUSY PJLIB_UTIL_EDNS_NXDOMAIN PJNATH_ESTUNTIMEDOUT \
+                    PJMEDIA_EAUD_BADFORMAT PJMEDIA_EVID_INVDEV PJSIP_SIMPLE_ENOPKG; do
+        grep -qx "$sentinel" "$TMP/errno-codes" || absent="$absent $sentinel"
+    done
+    if [[ -z "$absent" ]]; then
+        pass "status codes enumerated from the eight errno headers, PJSIP_EBUSY and one per family among them"
+    else
+        fail "status codes missing from the errno headers' enumeration:$absent"
+    fi
+
+    { echo 'import PJSIP'; sed 's/^/let _: pj_status_t = /' "$TMP/errno-codes"; } > "$TMP/errno.swift"
+    local total
+    total="$(wc -l < "$TMP/errno-codes" | tr -d ' ')"
+    if xcrun --sdk iphonesimulator swiftc -target "$target" -I "$headers" \
+        -typecheck "$TMP/errno.swift" 2> "$TMP/errno.err"; then
+        pass "all $total status codes typecheck from Swift as pj_status_t"
+        return
+    fi
+    # Line N+1 of errno.swift names code N. One "REASON NAME" line per rejected code.
+    awk '
+        NR == FNR { code[FNR + 1] = $1; next }
+        /errno\.swift:[0-9]+:[0-9]+: error: / {
+            s = $0; sub(/^.*errno\.swift:/, "", s)
+            line = s; sub(/:.*/, "", line)
+            message = s; sub(/^[0-9]+:[0-9]+: error: /, "", message)
+            if (!(line in code) || (line in seen)) next
+            seen[line]
+            if (message ~ /^cannot find /)        print "missing", code[line]
+            else if (message ~ /^ambiguous use /) print "ambiguous", code[line]
+            else                                  print "other", code[line] " (" message ")"
+        }
+    ' "$TMP/errno-codes" "$TMP/errno.err" > "$TMP/errno-rejected"
+    if [[ -s "$TMP/errno-rejected" ]]; then
+        local missing ambiguous other
+        missing="$(awk '$1 == "missing" { printf " %s", $2 }' "$TMP/errno-rejected")"
+        ambiguous="$(awk '$1 == "ambiguous" { printf " %s", $2 }' "$TMP/errno-rejected")"
+        other="$(awk '$1 == "other" { $1 = ""; printf "%s", $0 }' "$TMP/errno-rejected")"
+        fail "$(wc -l < "$TMP/errno-rejected" | tr -d ' ') of $total status codes do not typecheck from Swift${missing:+ — missing:$missing}${ambiguous:+ — ambiguous:$ambiguous}${other:+ — other:$other}"
+    else
+        fail "status codes failed to typecheck: $(head -3 "$TMP/errno.err" | tr '\n' ' ')"
+    fi
+}
+
 verify_typecheck() {
     section "── Swift typecheck (consumer simulation)"
     local headers="$XCF/ios-arm64-simulator/Headers"
@@ -443,26 +520,7 @@ verify_typecheck() {
         fail "import PJSIP failed to typecheck: $(head -3 "$TMP/c.err" | tr '\n' ' ')"
     fi
 
-    # Every status code build.sh exported must be visible to Swift by the macro's
-    # own name, as a pj_status_t. The importer drops the macros themselves,
-    # which is why the export exists; an ambiguity error
-    # here means a newer Swift has started importing them and the export can go.
-    local errno_h="$headers/PJSIP-errno-swift.h" errno_count
-    if [[ -f "$errno_h" ]]; then
-        {
-            echo 'import PJSIP'
-            sed -nE 's/.*swift_name\("([A-Z0-9_]+)"\).*/let _: pj_status_t = \1/p' "$errno_h"
-        } > "$TMP/errno.swift"
-        errno_count="$(grep -c '^let ' "$TMP/errno.swift" || true)"
-        if [[ "$errno_count" -gt 0 ]] && grep -qx 'let _: pj_status_t = PJSIP_EBUSY' "$TMP/errno.swift" \
-            && xcrun --sdk iphonesimulator swiftc -target "$target" -I "$headers" -typecheck "$TMP/errno.swift" 2> "$TMP/errno.err"; then
-            pass "$errno_count sip_errno.h status codes visible to Swift, PJSIP_EBUSY among them"
-        else
-            fail "sip_errno.h status codes not visible to Swift: $(head -3 "$TMP/errno.err" 2>/dev/null | tr '\n' ' ')"
-        fi
-    else
-        fail "PJSIP-errno-swift.h missing — Swift cannot name PJSIP_EBUSY"
-    fi
+    verify_status_codes "$headers" "$target"
 
     printf 'import PJSUA2\n' > "$TMP/cpp.swift"
     if xcrun --sdk iphonesimulator swiftc -target "$target" -cxx-interoperability-mode=default \

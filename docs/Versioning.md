@@ -72,6 +72,13 @@ different `.a` SHA-256. What *is* reproducible is one level down — the archive
 prove a respin did not change the code, extract both archives and compare member checksums
 (`0.2.1` vs the withdrawn `0.2.0`: 428/428 identical per slice), not the `.a` digest.
 
+Two refinements, from cutting `0.3.1`. Compare members **by position**: the archive holds 448
+members under 428 names, and `ar -x` keeps one file per name, so extraction silently skips 20.
+And a respin that has lost its build tree can still be proven, by rebuilding from the same
+sources with the same Xcode **under the same build-root path**: the objects embed that absolute
+path in about 40 strings, and with it unchanged the rebuild reproduces every member byte for
+byte.
+
 ### Checksums are published, not just computed
 
 The SwiftPM checksum of the release asset goes **in the release notes**, so a downstream author can
@@ -84,6 +91,7 @@ One row per release. `Patches` lists what `scripts/patches/` applied at build ti
 
 | Package | PJSIP | Upstream SHA | Patches | Artifact SHA-256 (SwiftPM checksum) | Notes |
 |---|---|---|---|---|---|
+| `0.3.1` | 2.17.0 (master, post-2.17) | [`bd69054a6`](https://github.com/pjsip/pjproject/commit/bd69054a696054db8fb4e62b759a3ecaf26c0189) | none | `89884473132571c75956d0cd2727c9bb0b9d09b2c614e09071599dbd0af14422` | Headers-only respin of `0.3.0`. `PJSIP-errno-swift.h` now exports every status code Swift's importer drops from the eight errno headers: 206 in all, `0.3.0`'s 78 `sip_errno.h` names plus 128 from pjlib-util, pjnath, the audio and video device headers, and pjsip-simple. All 341 codes the headers define are nameable from Swift, and `verify-xcframework.sh --typecheck` checks them independently of the export (ARCHITECTURE.md decision 4). Rebuilt from the same sources with the same Xcode 27.0 under `0.3.0`'s build path: all 448 archive members and the symbol table identical to `0.3.0` by position, per slice; headers differ only in `PJSIP-errno-swift.h`. bcg729 `1.1.2` |
 | `0.3.0` | 2.17.0 (master, post-2.17) | [`bd69054a6`](https://github.com/pjsip/pjproject/commit/bd69054a696054db8fb4e62b759a3ecaf26c0189) | none | `3e7e3a5c5993ef4e5dd4e0d8ce28fa3b09872662fc942ddb6f351051bf090c5b` | 105 upstream commits on `0.2.1`, among them a configured `+sip.instance` sent without SIP outbound ([#5313](https://github.com/pjsip/pjproject/pull/5313)), the regc Contact update when outbound is unconfirmed (#5281), the Apple TLS series (#5222 whole-file read, #5230, #5233, #5234, #5282) and three security advisories that touch a SIP client. **First artifact with no local patch**: `iphone17-darwin-dev-stride` retired, upstream carries it as #5249. The module exports the `sip_errno.h` status codes to Swift (`PJSIP-errno-swift.h`, ARCHITECTURE.md decision 4). Conference bridge is now `conf_thread.c` (upstream's new default, #5297). `config_site-ios.h`: comments only. bcg729 `1.1.2` |
 | `0.2.1` | 2.17.0 (master, post-2.17) | [`288de6142`](https://github.com/pjsip/pjproject/commit/288de6142044483944a60015c17afd32b6166bb6) | `iphone17-darwin-dev-stride` | `36f49d1abc62010184439e8d56a45c292307ed5321bff47a983cd1390c282dda` | **Replaces the withdrawn `0.2.0`.** Module map gains `textual header` for the two config headers — without it the clang module dropped `config_site.h`'s overrides and Swift imported the `PJ_CONFIG_IPHONE` preset's values instead of the binary's (ARCHITECTURE.md decision 4). Capacity block now hands `PJSUA_MAX_ACC` / `PJSUA_MAX_CONF_PORTS` back to upstream's defaults with a bare `#undef`. Headers-only respin: 428/428 archive members identical to `0.2.0` per slice |
 | ~~`0.2.0`~~ **withdrawn** | 2.17.0 (master, post-2.17) | [`288de6142`](https://github.com/pjsip/pjproject/commit/288de6142044483944a60015c17afd32b6166bb6) | `iphone17-darwin-dev-stride` | `00214082e4b246bf224f6a2dd3ca8a064e755bb8205962194518377a7349526b` | **Deleted 2026-08-22** — shipped a module map that made every Swift consumer compile `PJSUA_MAX_ACC` 4 / `PJSUA_MAX_CALLS` 4 / `PJSUA_MAX_CONF_PORTS` 12 against a binary built with 8 / 8 / 254, and with them a `pjsua_conf_port_info` 968 bytes shorter than the library writes. Superseded by `0.2.1`; asset and tag removed so nothing can resolve it |
