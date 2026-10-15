@@ -1,0 +1,66 @@
+name: Newest Xcode
+
+# PJSIP-errno-swift.h gives Swift a constant for exactly the status codes the Swift that
+# built the release cannot import (docs/ARCHITECTURE.md, decision 4). A newer Swift that
+# learns to import one of those macros turns every use of it into "ambiguous use of" in a
+# consumer's build. This typechecks the latest release under the newest Xcode the hosted
+# runners offer, betas included, so that shows up here before it reaches a consumer.
+
+on:
+  schedule:
+    - cron: '23 5 * * 1'   # Mondays, 05:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # Explicit, so the pipe into tee below keeps the verifier's exit status (pipefail).
+    shell: bash
+
+jobs:
+  typecheck:
+    name: Typecheck the latest release under the newest Xcode
+    # Betas and RCs ship only on the newest macOS image (actions/runner-images' Xcode
+    # support policy). Move this label to the next one when it is announced.
+    runs-on: xcode-27
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Select the newest Xcode on the runner
+        run: |
+          # Installs are directories; the version aliases beside them are symlinks. The
+          # name is not the version (Xcode_27.1_beta.app has held 27.1), so read the bundle.
+          find /Applications -maxdepth 1 -name 'Xcode*.app' -type d | while read -r app; do
+              IFS=. read -r major minor patch <<< "$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")"
+              echo "${major:-0} ${minor:-0} ${patch:-0} $app"
+          done | sort -k1,1n -k2,2n -k3,3n > "$RUNNER_TEMP/xcodes"
+          cat "$RUNNER_TEMP/xcodes"
+          sudo xcode-select --switch "$(tail -n 1 "$RUNNER_TEMP/xcodes" | cut -d' ' -f4-)"
+          xcodebuild -version
+          xcrun swift --version
+          echo "XCODE=$(xcodebuild -version | paste -sd' ' -)" >> "$GITHUB_ENV"
+
+      - name: Download the latest release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
+          echo "Latest release: $tag"
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern 'PJSIP.xcframework-*.zip' --dir "$RUNNER_TEMP/asset"
+          ditto -x -k "$RUNNER_TEMP"/asset/PJSIP.xcframework-*.zip "$RUNNER_TEMP/asset"
+          echo "RELEASE=$tag" >> "$GITHUB_ENV"
+
+      - name: Typecheck every status code from Swift
+        id: verify
+        run: ./scripts/verify-xcframework.sh --typecheck "$RUNNER_TEMP/asset/PJSIP.xcframework" | tee "$RUNNER_TEMP/verify.log"
+
+      # The verifier's FAIL lines name each code that is missing or ambiguous. Repeat them
+      # as annotations, so they show on the run page and in the failure notification.
+      - name: Name the failed checks
+        if: failure() && steps.verify.outcome == 'failure'
+        run: |
+          sed -n 's/^ *FAIL  *//p' "$RUNNER_TEMP/verify.log" | while read -r line; do
+              echo "::error title=$RELEASE under $XCODE::$line"
+          done
