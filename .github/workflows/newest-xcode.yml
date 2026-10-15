@@ -10,6 +10,9 @@ on:
   schedule:
     - cron: '23 5 * * 1'   # Mondays, 05:23 UTC
   workflow_dispatch:
+  # A change to this file tests itself, e.g. moving runs-on to the next image.
+  pull_request:
+    paths: [.github/workflows/newest-xcode.yml]
 
 permissions:
   contents: read
@@ -62,5 +65,5 @@ jobs:
         if: failure() && steps.verify.outcome == 'failure'
         run: |
           sed -n 's/^ *FAIL  *//p' "$RUNNER_TEMP/verify.log" | while read -r line; do
-              echo "::error title=$RELEASE under $XCODE::$line"
+              echo "::error title=$RELEASE under $XCODE::${line//%/%25}"
           done
