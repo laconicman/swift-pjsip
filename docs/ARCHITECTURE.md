@@ -161,7 +161,8 @@ meets that error in the consumer's build. `verify-xcframework.sh --typecheck`, w
 the build's own verify step and CI run, enumerates the codes itself, independently of
 the generated header, and type-checks every one from Swift. It fails naming each code
 that is missing or ambiguous, so running it under a new toolchain shows whether a
-respin is due.
+respin is due. A weekly workflow (`.github/workflows/newest-xcode.yml`) does that for
+the latest release under the newest Xcode the hosted runners offer, betas included.
 
 ### 5. `config_site.h` ships inside the artifact — and is the ABI
 
