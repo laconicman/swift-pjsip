@@ -22,6 +22,7 @@ its default. What did change is the conference bridge, below.
 `scripts/config_site-ios.h` starts from `PJ_CONFIG_IPHONE` + `config_site_sample.h` and sets: video
 on (`PJMEDIA_HAS_VIDEO`, iOS video device, VideoToolbox codec), UDP/TCP/TLS transports with
 `PJ_SSL_SOCK_IMP_APPLE` (deliberately, not the deprecated Darwin/SecureTransport backend), BCG729,
+Opus (`PJMEDIA_HAS_OPUS_CODEC`, since `0.4.0`),
 `PJMEDIA_RTP_PT_TELEPHONE_EVENTS 101`, CoreAudio advanced ducking, and `PJSIP_MAX_PKT_LEN 16000`.
 `PJSIP_DONT_SWITCH_TO_TCP` is **not** set — it used to be, and it disabled RFC 3261 §18.1.1 outright,
 so no authenticated call could be placed over UDP.
@@ -162,10 +163,19 @@ Everything below is **not** set, and inherits an upstream default of `0`.
 
 ### Codecs
 
-Opus is absent from the current binary — see [Codec-Coverage](./Codec-Coverage.md). Relevant to
-quality work beyond NAT and liveness: G.711 has no published `Ie`/`Bpl` sensitivity problem, but
-G.722's E-model impairment values are not tabulated in the sources we found at all, which is one of
-the reasons the quality design refuses to compute a MOS.
+**Opus is on since `0.4.0`** (`PJMEDIA_HAS_OPUS_CODEC 1` + `--with-opus`, libopus `v1.6.1`). Only
+the gate is set — the `PJMEDIA_CODEC_OPUS_DEFAULT_*` values stay at upstream's (sample rate 48000,
+bitrate 0 = auto, complexity 5, CBR off i.e. VBR; `pjmedia-codec/config.h:513-555`) and are
+runtime-tunable per endpoint via `pjmedia_codec_opus_set_config()`. Two runtime facts an
+application still has to arrange itself: Opus is `opus/48000/2` on the wire while pjsua's bridge
+defaults to 16 kHz (`PJSUA_DEFAULT_CLOCK_RATE`), so it resamples every frame unless the app raises
+`pjsua_media_config.clock_rate`/`snd_clock_rate` to 48000; and offer order is codec priority, so
+"prefer Opus" is `pjsua_codec_set_priority`, not a build switch. Full story:
+[Codec-Coverage](./Codec-Coverage.md).
+
+Relevant to quality work beyond NAT and liveness: G.711 has no published `Ie`/`Bpl` sensitivity
+problem, but G.722's E-model impairment values are not tabulated in the sources we found at all,
+which is one of the reasons the quality design refuses to compute a MOS.
 
 ---
 

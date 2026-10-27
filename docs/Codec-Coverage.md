@@ -1,6 +1,6 @@
 # Codec coverage of the shipped binary
 
-What the `PJSIP.xcframework` this package currently ships does and does not carry, and why
+What the `PJSIP.xcframework` this package currently ships (0.4.0) does and does not carry, and why
 it matters for downstream apps choosing codecs. (It is a release asset, not a file in this
 repository — see ARCHITECTURE.md *Distribution*.)
 
@@ -8,48 +8,39 @@ repository — see ARCHITECTURE.md *Distribution*.)
 
 configure flags:
 `--disable-gsm-codec --disable-speex-codec --disable-speex-aec --enable-darwin-ssl
---enable-video --with-bcg729`, and `config_site.h` sets `PJMEDIA_HAS_BCG729 1`,
-`PJMEDIA_HAS_INTEL_IPP_CODEC_G729 0`. There is **no** `--with-opus` and **no** libopus input.
+--enable-video --with-bcg729 --with-opus`, and `config_site.h` sets
+`PJMEDIA_HAS_BCG729 1`, `PJMEDIA_HAS_OPUS_CODEC 1`, `PJMEDIA_HAS_INTEL_IPP_CODEC_G729 0`.
 
-## Expected audio codec set (verify — see below)
+## Audio codec set
 
-| Codec | Expected | Note |
+| Codec | Shipped | Note |
 |---|---|---|
+| **Opus** | ✓ | `opus/48000/2` (RFC 7587) via libopus `v1.6.1`, BSD-3-Clause + the Opus patent licence; folded into `libpjproject.a`, headers not shipped |
 | G.711 µ-law / A-law (PCMU/PCMA) | ✓ | always built |
 | G.722 | ✓ | built-in |
 | G.722.1 (`g7221`) | ✓ | bundled third-party |
 | iLBC | ✓ | bundled third-party |
-| L16 | ✓ | built-in |
+| L16 | ✓ | built-in (pjsua registers it disabled by default) |
 | G.729 (bcg729) | ✓ | `--with-bcg729`; GPLv3 + patents (see licensing) |
 | GSM | ✗ | `--disable-gsm-codec` |
 | Speex (codec + AEC) | ✗ | `--disable-speex-codec/-aec` (resampler may remain) |
-| **Opus** | ✗ | no `--with-opus` / no libopus |
 
-## Opus is absent
+Verified against the binary itself — `scripts/verify-xcframework.sh` asserts per slice that
+`pjmedia_codec_opus_init` (the pjmedia wrapper, i.e. `PJMEDIA_HAS_OPUS_CODEC` was on) and
+`opus_repacketizer_get_size` (the libopus object configure probes for) are defined symbols, and
+that the GSM/Speex init symbols are absent.
 
-Opus is the de-facto modern SIP/WebRTC audio codec; many providers and conferencing servers
-negotiate it preferentially. It is **not** compiled into the shipped binary — confirmed by
-symbol inspection — which limits interop and quality for a general-purpose softphone.
+## What Opus costs the consumer: clock rate
 
-Confirmed via `nm` (no `opus_*` / `pjmedia_codec_opus*` symbols in the archive):
-
-```
-nm -gU .build/artifacts/*/PJSIP/PJSIP.xcframework/ios-arm64/libpjproject.a 2>/dev/null | grep -i -E 'opus|g7221|ilbc|bcg729'
-```
-
-(or extend `scripts/verify-xcframework.sh` with an Opus presence/absence assertion alongside
-its existing GSM/Speex checks).
-
-## Recommendation
-
-For a full-featured softphone, add Opus to the build: provide libopus to `scripts/build.sh`,
-pass `--with-opus`, and set `PJMEDIA_HAS_OPUS_CODEC 1` in `config_site.h` (this changes the
-ABI, so it is a new binary/tag, not a downstream override — consistent with the existing
-"do not override `config_site.h`" rule). Opus is royalty-free, so it adds no licensing
-obligation beyond what PJSIP already carries.
-
-> Tooling note: the sibling `pjsip-master 2` build tree in this workspace already carries
-> `opus.sh` and a built `libopus.a`, so wiring Opus into `scripts/build.sh` is low-friction.
+`opus/48000/2` is fixed by RFC 7587 — the wire format is always 48 kHz. pjsua's conference bridge
+defaults to **16 kHz** (`PJSUA_DEFAULT_CLOCK_RATE`, also `snd_clock_rate`), so with the defaults an
+Opus call resamples every frame in both directions. A consumer that wants Opus as its primary codec
+sets `pjsua_media_config.clock_rate = 48000` (and `snd_clock_rate`, so the sound device runs at 48
+kHz too). Codec selection and priority — `pjsua_codec_set_priority()` and friends — are the
+wrapping engine's job; see laconicman/swift-pjsua#27. Note that Opus registers at
+`PJMEDIA_CODEC_PRIO_NORMAL` like every other codec, in factory order after G.711/G.722/G.722.1
+(`pjmedia-codec/audio_codecs.c`) — it is negotiated, not offered first; raising its offer position
+is a `set_codec_priority` call the engine makes.
 
 - Refs: the release notes for the pinned version; PJSIP media codecs
   <https://docs.pjsip.org/en/latest/>; Opus <https://opus-codec.org/>.

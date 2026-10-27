@@ -8,8 +8,8 @@
 
 **[PJSIP](https://www.pjsip.org) for iOS as a single Swift Package.** Add one URL in
 Xcode, `import PJSIP`, and you have a full SIP/VoIP stack with video
-(Metal/VideoToolbox), native Darwin TLS, G.729, and SRTP — no bridging header, no
-manual library juggling, no build-from-source ritual.
+(Metal/VideoToolbox), native Darwin TLS, Opus, G.729, and SRTP — no bridging
+header, no manual library juggling, no build-from-source ritual.
 
 ```swift
 dependencies: [
@@ -45,12 +45,14 @@ Swift package. Modules instead of a bridging header. One artifact instead of twe
 - **One static library per platform slice** — `libpjproject.a` — containing every
   PJSIP sublibrary (`pjlib`, `pjlib-util`, `pjnath`, `pjmedia*`, `pjsip*`, `pjsua`,
   `pjsua2`), all bundled third-party deps (`srtp`, `yuv`, `webrtc`, `ilbc`, `g7221`,
-  `resample`), **and** `bcg729` (G.729). Unused objects are dead-stripped when your
+  `resample`), **and** `bcg729` (G.729) + `libopus` (Opus). Unused objects are
+  dead-stripped when your
   app links, so "everything included" does not mean "everything shipped".
 - **Slices:** `ios-arm64` (device) and `ios-arm64-simulator`.
 - **A unified `Headers/` tree** with a single `module.modulemap` exposing two modules.
 - **Capabilities baked in:** video (iOS camera backend + VideoToolbox hardware codec),
-  TLS via native Darwin SSL (Security/Network frameworks — no OpenSSL), G.729 (bcg729),
+  TLS via native Darwin SSL (Security/Network frameworks — no OpenSSL), Opus
+  (libopus), G.729 (bcg729),
   SRTP, UDP/TCP/TLS transports. GSM and Speex are compiled out.
 - **the release notes on each [GitHub Release](https://github.com/laconicman/swift-pjsip/releases)** documenting what the
   committed binary was built from and with.
@@ -241,7 +243,8 @@ by inspecting the binary, not the logs:
 
 This proves: arm64 slices with correct device/simulator platform tags and minimum
 iOS; native Darwin SSL (Security/Network symbols present, OpenSSL absent); TLS
-transport; video + VideoToolbox; bcg729 G.729; SRTP; GSM/Speex absent; sane module
+transport; video + VideoToolbox; bcg729 G.729; Opus (pjmedia wrapper + libopus);
+SRTP; GSM/Speex absent; sane module
 map and headers. `--typecheck` additionally compiles `import PJSIP` / `import PJSUA2`
 against the artifact the way SwiftPM would.
 
@@ -263,7 +266,7 @@ committed binary; two modules from one binary target; …) are documented in:
 
 ## Licensing
 
-Three layers, three licenses — please read this before shipping:
+Four layers, four licenses — please read this before shipping:
 
 - **This package** (manifest, scripts, docs): [MIT](LICENSE).
 - **PJSIP** (the compiled binary): [GPL v2 or later](https://www.pjsip.org/licensing.htm),
@@ -271,6 +274,9 @@ Three layers, three licenses — please read this before shipping:
 - **bcg729** (G.729 codec, folded into the binary):
   [GPL v3](https://github.com/BelledonneCommunications/bcg729), with commercial
   licensing available from Belledonne Communications.
+- **libopus** (Opus codec, folded into the binary):
+  [BSD-3-Clause](https://github.com/xiph/opus), plus the Opus patent licence
+  (a royalty-free grant from the Xiph.Org/Skype/Broadcom contributors).
 
 Shipping the combined binary in a closed-source app requires either GPL compliance
 (effectively GPLv3 for the combination) or commercial licenses from the respective
