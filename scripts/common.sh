@@ -434,7 +434,7 @@ fetch_opus_source() {
         latest)
             ref="$(gh_latest_tag "${OPUS_GH_REPO}")"
             if [[ -n "$ref" ]]; then
-                kind="release"
+                kind="tag"
                 log_info "Latest opus tag: ${ref}"
                 git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$ref" "$url" "$dest" \
                     || error_exit "Failed to clone opus at ${ref}"

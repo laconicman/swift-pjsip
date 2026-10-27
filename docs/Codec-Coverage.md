@@ -38,7 +38,7 @@ Opus call resamples every frame in both directions. A consumer that wants Opus a
 sets `pjsua_media_config.clock_rate = 48000` (and `snd_clock_rate`, so the sound device runs at 48
 kHz too). Codec selection and priority — `pjsua_codec_set_priority()` and friends — are the
 wrapping engine's job; see laconicman/swift-pjsua#27. Note that Opus registers at
-`PJMEDIA_CODEC_PRIO_NORMAL` like every other codec, in factory order after G.711/G.722/G.722.1
+`PJMEDIA_CODEC_PRIO_NORMAL` like every other codec, in factory order after iLBC/G.711/G.722/G.722.1 and before bcg729
 (`pjmedia-codec/audio_codecs.c`) — it is negotiated, not offered first; raising its offer position
 is a `set_codec_priority` call the engine makes.
 
