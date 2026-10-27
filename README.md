@@ -248,6 +248,14 @@ SRTP; GSM/Speex absent; sane module
 map and headers. `--typecheck` additionally compiles `import PJSIP` / `import PJSUA2`
 against the artifact the way SwiftPM would.
 
+The reasoning is checked too: every override in `scripts/config_site-ios.h` cites
+pjproject by `file:line` plus the `token` found there, and `./scripts/check-cites.sh`
+asserts each token against the tree the `download` phase extracted, and the header's
+"line references are pjproject master @ *sha*" line against the commit that phase recorded
+— a stale citation, a wrong sha, or a header with no citations at all fails the build
+(`--allow-stale-cites` downgrades it to a warning for exploratory builds). The claim is
+thereby one the build proves on every bump, not one the last edit made.
+
 `./scripts/build.sh notes` generates `RELEASE-NOTES.md` for the build — sources and
 commits, configure flags, the full `config_site.h`, Xcode/SDK/clang/CMake versions,
 artifact checksums, and the verification result.
