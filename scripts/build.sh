@@ -128,11 +128,18 @@ apply_patches() {
 check_config_site_cites() {
     local checker="${SCRIPTS_DIR}/check-cites.sh"
     # The header also names the commit its numbers are for; the extracted archive
-    # carries no .git, so hand the checker the commit the download phase recorded.
-    # An archive= source records none, and then only the citations are checked.
+    # carries no .git, so hand the checker the commit the download phase recorded —
+    # but only for sources whose archive IS that commit (release, tag, commit). A
+    # branch= archive is cached by ref name while its commit is re-resolved on every
+    # download, so the two can name different trees once the branch moves; and a
+    # header pinned to one sha cannot match a moving head except by chance. For
+    # branch= and archive= only the citations are checked.
     load_meta
     local commit_args=()
-    [[ -n "${PJSIP_COMMIT:-}" ]] && commit_args=(--commit "${PJSIP_COMMIT}")
+    case "${PJSIP_SOURCE_KIND:-}" in
+        release|tag|commit)
+            [[ -n "${PJSIP_COMMIT:-}" ]] && commit_args=(--commit "${PJSIP_COMMIT}") ;;
+    esac
     if "${checker}" ${commit_args[@]+"${commit_args[@]}"} "${CONFIG_SITE}" "${BUILD_ROOT}/pjproject"; then
         return 0
     fi
