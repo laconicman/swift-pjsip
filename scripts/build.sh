@@ -34,7 +34,8 @@ VPX_SOURCE_FLAG=""
 
 # The configure flags that define this distribution: native Darwin SSL (TLS
 # via Security/Network frameworks, no OpenSSL), video, G.729 via bcg729, Opus
-# via libopus (--with-* live on the configure line, not here), and no
+# via libopus, VP8/VP9 via libvpx (--with-* live on the configure line, not
+# here), and no
 # GSM/Speex. Changing these changes the ABI story documented in the
 # README — regenerate the release notes (`notes`) and re-verify (`verify`).
 CONFIGURE_FLAGS=(

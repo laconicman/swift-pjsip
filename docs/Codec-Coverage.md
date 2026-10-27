@@ -52,7 +52,18 @@ Both VPX codecs are registered by `pjmedia_codec_vpx_vid_init` (wired in `pjsua_
 both are clock rate 90000 on the wire — measured by `videoCodecs()` on the shipped binary).
 Selection and priority are
 the engine's job at runtime — `pjsua_vid_codec_set_priority()`, or `videoCodecPriorities` in
-swift-pjsua — not a build knob.
+swift-pjsua — not a build knob. H.264 is registered first (`pjsua_vid.c` initialises VideoToolbox
+before VPX), so with untouched priorities the offer order is H.264, VP8, VP9.
+
+What the wrapper decides for you (`pjmedia-codec/vpx.c`, `vpx_codec_open`; none of it is a
+`config.h` macro, so none of it is tunable without a rebuild): `g_threads = 4`, one-pass CBR,
+`VP8E_SET_CPUUSED 9` for both codecs — the fastest, lowest-quality setting VP9 allows (its range
+is −9..9; VP8's is −16..16) — `g_error_resilient = 0`, and a keyframe interval of 60 s, so
+recovery after loss rides on the decoder's `PJMEDIA_EVENT_KEYFRAME_MISSING` → PLI/FIR path (which
+`vpx_codec_decode` does publish). The VP9 packetizer writes the minimal one-byte RFC 9628
+descriptor (no picture id). Upstream CI builds libvpx but never sets
+`PJMEDIA_HAS_VPX_CODEC_VP9`, so VP9 in `vpx.c` is exercised by `vid_codec_test.c` only when a
+consumer turns it on — expect VP8 to be the interoperable one and VP9 the best-effort one.
 
 Verified against the binary itself — `scripts/verify-xcframework.sh` asserts per slice that
 `pjmedia_codec_opus_init` (the pjmedia wrapper, i.e. `PJMEDIA_HAS_OPUS_CODEC` was on),

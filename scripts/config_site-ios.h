@@ -190,8 +190,8 @@
  * (pjmedia-codec/config.h:716-717 `PJMEDIA_HAS_VPX_CODEC_VP8`), VP9 defaults
  * OFF (pjmedia-codec/config.h:725-726 `PJMEDIA_HAS_VPX_CODEC_VP9`) — set to 1
  * here so the SDP set covers the whole royalty-free pair a WebRTC peer is
- * likely to offer. Both come out as encoding_name/90000 in
- * pjsua_vid_enum_codecs().
+ * likely to offer. pjsua_vid_enum_codecs() ids them as encoding_name/PT
+ * (VP8/102, VP9/105 measured); the SDP form is VP8/90000, VP9/90000.
  *
  * COST, measured on this build: libvpx.a is 2289040 B (device) /
  * 2296032 B (simulator), 232 members, ~1.6 MB of __TEXT — the largest folded
