@@ -25,6 +25,7 @@ MIN_IOS_VERSION="${MIN_IOS_VERSION:-15.0}"   # keep in sync with Package.swift `
 CONFIG_SITE="${CONFIG_SITE:-${SCRIPTS_DIR}/config_site-ios.h}"
 PATCHES_DIR="${PATCHES_DIR:-${SCRIPTS_DIR}/patches}"
 NONINTERACTIVE="${NONINTERACTIVE:-0}"
+ALLOW_STALE_CITES="${ALLOW_STALE_CITES:-0}"
 PJSIP_SOURCE_FLAG=""
 BCG729_SOURCE_FLAG=""
 OPUS_SOURCE_FLAG=""
@@ -112,6 +113,30 @@ apply_patches() {
     log_success "Applied ${#patches[@]} patch(es) from ${PATCHES_DIR}"
 }
 
+# The config_site.h cites pjproject by file:line for every override it makes.
+# Those numbers move with every upstream bump, so check them against the tree
+# this build is about to compile. On a fresh extraction that is the pristine
+# upstream tree the header's "pjproject master @ <sha>" line names; a tree
+# reused from an earlier phase already carries the patches, whose shifts the
+# checker's ±2-line tolerance absorbs (a patch that moves a cited block
+# further is itself a reason to refresh the citation). Stale is a HARD
+# FAILURE for the same reason a patch that will not apply is: the header's
+# reasoning must follow the source it is compiled against, not silently point
+# elsewhere. --allow-stale-cites turns it into a warning for an exploratory
+# build (e.g. branch=master) where moving lines are expected and not yet
+# worth fixing.
+check_config_site_cites() {
+    local checker="${SCRIPTS_DIR}/check-cites.sh"
+    if "${checker}" "${CONFIG_SITE}" "${BUILD_ROOT}/pjproject"; then
+        return 0
+    fi
+    if [[ "${ALLOW_STALE_CITES}" == "1" ]]; then
+        log_warn "Stale citations in $(basename "${CONFIG_SITE}") tolerated (--allow-stale-cites)."
+        return 0
+    fi
+    error_exit "$(basename "${CONFIG_SITE}") cites lines this PJSIP tree does not have. Fix the numbers (the checker names where each token is now) and the header's '@ <sha>' line, or pass --allow-stale-cites for an exploratory build."
+}
+
 apply_config_site() {
     [[ -f "${CONFIG_SITE}" ]] || error_exit "config_site.h not found: ${CONFIG_SITE}"
     log_info "Applying $(basename "${CONFIG_SITE}") -> pjproject/pjlib/include/pj/config_site.h"
@@ -155,6 +180,7 @@ ensure_pjproject_tree() {
         mv "$top" "${BUILD_ROOT}/pjproject"
         rm -rf "${BUILD_ROOT}/.extract-pjsip"
     fi
+    check_config_site_cites
     apply_patches
     apply_config_site
 }
@@ -1030,12 +1056,14 @@ Options:
   --config-site PATH     config_site.h to bake in (default: scripts/config_site-ios.h)
   --patches DIR          Directory of *.patch to apply (default: scripts/patches;
                          point elsewhere, or at an empty dir, to build unpatched)
+  --allow-stale-cites    Warn instead of fail when the config_site.h file:line
+                         citations do not match the PJSIP tree (scripts/check-cites.sh)
   --build-root DIR       Work directory (default: <repo>/.build-pjsip)
   -h, --help             Show this help
 
 Environment equivalents: PJSIP_SOURCE, BCG729_SOURCE, OPUS_SOURCE, NONINTERACTIVE=1,
-MIN_IOS_VERSION, CONFIG_SITE, PATCHES_DIR, PJSIP_BUILD_ROOT, EXTRA_CONFIGURE_FLAGS,
-EXTRA_LDFLAGS.
+MIN_IOS_VERSION, CONFIG_SITE, PATCHES_DIR, ALLOW_STALE_CITES=1, PJSIP_BUILD_ROOT,
+EXTRA_CONFIGURE_FLAGS, EXTRA_LDFLAGS.
 
 Examples:
   $0 all                                   # interactive source selection, full build
@@ -1066,6 +1094,7 @@ main() {
             --config-site=*)   CONFIG_SITE="${1#*=}"; shift ;;
             --patches)         PATCHES_DIR="${2:?--patches needs a value}"; shift 2 ;;
             --patches=*)       PATCHES_DIR="${1#*=}"; shift ;;
+            --allow-stale-cites) ALLOW_STALE_CITES=1; shift ;;
             --build-root)      BUILD_ROOT="${2:?--build-root needs a value}"; shift 2 ;;
             --build-root=*)    BUILD_ROOT="${1#*=}"; shift ;;
             -h|--help)         usage; exit 0 ;;
