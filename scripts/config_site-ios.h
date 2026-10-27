@@ -17,7 +17,7 @@
  * here for a year silently breaking every authenticated call over UDP.
  * A comment that names the tradeoff would have caught it.
  *
- * Line references are pjproject master @ bd69054a6 (2026-10-09).
+ * Line references are pjproject master @ 1f0ebf2eb (2026-10-27).
  */
 
 /* ---------------------------------------------------------------------------
@@ -60,14 +60,14 @@
  * default is already enough — the preset is the only thing in the way.
  *
  * COST: pjsua_var.acc[] is a FIXED array inside the pjsua_data singleton
- * (pjsua_internal.h:677-678) and init_data() walks all of it at startup, so
+ * (pjsua_internal.h:678) and init_data() walks all of it at startup, so
  * four extra pjsua_acc entries are paid unconditionally, even with one account
  * configured. Measured against this build: sizeof(pjsua_acc) = 7168 B, so
- * +4 accounts = +28 KB, and sizeof(pjsua_data) is 106672 B in total.
+ * +4 accounts = +28 KB, and sizeof(pjsua_data) is 106680 B in total.
  */
 #undef  PJSUA_MAX_ACC
 
-/* 8 simultaneous calls (the preset AND upstream both say 4 — pjsua.h:6071 —
+/* 8 simultaneous calls (the preset AND upstream both say 4 — pjsua.h:6076 —
  * so this is a departure from upstream, not a restoration, and the only
  * literal in this section).
  *
@@ -78,16 +78,16 @@
  * line would hold us at 8 until someone edits it.
  *
  * COST: unlike PJSUA_MAX_ACC this is only a ceiling — pjsua_var.calls is
- * pool-allocated at pjsua_init() to ua_cfg.max_calls (pjsua_call.c:240-245),
+ * pool-allocated at pjsua_init() to ua_cfg.max_calls (pjsua_call.c:245-250),
  * which pjsua_config_default() sets to this macro (pjsua_core.c:115).
- * Measured sizeof(pjsua_call) = 22320 B, so leaving the default costs
+ * Measured sizeof(pjsua_call) = 22328 B, so leaving the default costs
  * +87 KB. An app that wants the old
  * footprint can lower max_calls at runtime; it cannot raise it past this.
  */
 #undef  PJSUA_MAX_CALLS
 #define PJSUA_MAX_CALLS 8
 
-/* Conference slots: whatever upstream defaults to (pjsua.h:8256, 254 as of
+/* Conference slots: whatever upstream defaults to (pjsua.h:8261, 254 as of
  * 2.17/master).
  *
  * WHY: this — not PJSUA_MAX_CALLS — is the real ceiling on a locally mixed
@@ -97,23 +97,23 @@
  *
  * Note the macro is only the DEFAULT for pjsua_media_config.max_media_ports
  * (pjsua_core.c:450), and that runtime field is what actually sizes the bridge
- * (passed as param.max_slots, pjsua_aud.c:342). The two must nevertheless
+ * (passed as param.max_slots, pjsua_aud.c:349). The two must nevertheless
  * agree, because pjsua_conf_get_active_ports() enumerates into a fixed
- * `unsigned ports[PJSUA_MAX_CONF_PORTS]` (pjsua_aud.c:934) — safe, since the
+ * `unsigned ports[PJSUA_MAX_CONF_PORTS]` (pjsua_aud.c:944) — safe, since the
  * array size bounds the enumeration, but it silently UNDER-REPORTS once the
  * live bridge is larger than the compile-time value.
  *
- * COST: 8 bytes per unused slot in conf->ports (conf_thread.c:1114-1116), plus
+ * COST: 8 bytes per unused slot in conf->ports (conf_thread.c:1114-1119), plus
  * max_ports*8 bytes per LIVE port for its listener_slots/listener_adj_level
- * arrays (conf_thread.c:711-718) — ~2 KB per live port at 254. The mixing hot
- * loop walks the active ports only, not max_ports (conf_thread.c:4056), so
+ * arrays (conf_thread.c:711-719) — ~2 KB per live port at 254. The mixing hot
+ * loop walks the active ports only, not max_ports (conf_thread.c:4085-4094), so
  * idle slots cost no CPU. (conf_thread.c, not conference.c: see the
  * PJMEDIA_CONF_BACKEND note below.)
  */
 #undef  PJSUA_MAX_CONF_PORTS
 
 /* PJSIP_MAX_TSX_COUNT / PJSIP_MAX_DIALOG_COUNT stay at the preset's 31.
- * They look like caps but are pj_hash_create() bucket counts (hash.c:89-120,
+ * They look like caps but are pj_hash_create() bucket counts (hash.c:254-282,
  * sip_transaction.c:534): entries chain, nothing is ever rejected, and the
  * only consequence at 8 calls + 8 registering accounts is slightly longer
  * collision chains. PJSIP_MAX_TIMER_COUNT derives from them for its INITIAL
@@ -145,6 +145,25 @@
  * both on makes which implementation answers ambiguous. */
 #define PJMEDIA_HAS_INTEL_IPP_CODEC_G729  0
 #define PJMEDIA_HAS_BCG729                1
+
+/* Opus via libopus (BSD-3-Clause + the Opus patent licence; statically folded
+ * into libpjproject.a like bcg729 — see docs/ARCHITECTURE.md "what is inside
+ * the archive"). Upstream's configure AC_DEFINE lands in
+ * pjmedia-codec/config_auto.h, whose template guards it with
+ * #ifndef PJMEDIA_HAS_OPUS_CODEC — so this line wins silently (same value, no
+ * redefinition warning). It exists because the house rule is that every
+ * feature macro is stated explicitly per slice; what actually proves libopus
+ * was found and linked is the configure-log assertion in build.sh and the
+ * verifier's symbol checks, not this macro.
+ *
+ * COST: libopus.a is 619 KB (device) / 654 KB (simulator), adding 138 members
+ * to libpjproject.a — 586 total vs 448 on 0.3.1 (+1.5 MB merged; the delta is
+ * libopus plus the 36 upstream commits' code changes, not libopus alone).
+ * Runtime shape (clock rate, bitrate, complexity, VBR)
+ * is NOT pinned here — PJMEDIA_CODEC_OPUS_DEFAULT_* stay at upstream defaults
+ * (48000 / 0 = auto / 5 / VBR) and are settable via
+ * pjmedia_codec_opus_set_config(). */
+#define PJMEDIA_HAS_OPUS_CODEC            1
 
 /* RFC 4733 telephone-event payload type pinned to 101 (upstream default is
  * 96). WHY: legacy infrastructure on the provider side does not renegotiate
@@ -190,7 +209,7 @@
  * It bounds received messages too: rdata's packet buffer is
  * char[PJSIP_MAX_PKT_LEN] (sip_transport.h:360), and a TCP message that fills
  * it is dropped with PJSIP_ERXOVERFLOW, the rest of the stream with it
- * (sip_transport.c:2268-2275). A REGISTER 200 lists every binding of the AOR,
+ * (sip_transport.c:2293-2301). A REGISTER 200 lists every binding of the AOR,
  * and with long +sip.instance values that grows fast: in a lab run, a 200
  * that still listed the bindings of a length test (instance values of up to
  * 2048 characters, ~4.3 KB together) came to ~4.7 KB and was lost at
@@ -204,7 +223,7 @@
 /* PJSIP_DONT_SWITCH_TO_TCP is deliberately NOT defined (upstream default 0).
  *
  * It used to be 1 here, commented only "Disable switching to TCP".
- * That single line disabled RFC 3261 §18.1.1 outright: sip_util.c:1419 guards
+ * That single line disabled RFC 3261 §18.1.1 outright: sip_util.c:1430 guards
  * the ENTIRE block — size check and TCP-transport lookup alike — on
  * disable_tcp_switch == 0. The consequence was that no authenticated call
  * could be placed over a UDP transport at all: adding the digest pushes the
@@ -225,14 +244,14 @@
  * (conf_thread.c) wherever there are threads, so this slice no longer builds
  * conference.c. PJMEDIA_CONF_THREADS defaults to 1 under TARGET_OS_IPHONE
  * (pjmedia/config.h:178-188), so pjsua passes worker_threads 0
- * (pjsua_aud.c:348) and the bridge runs with is_parallel false
+ * (pjsua_aud.c:355) and the bridge runs with is_parallel false
  * (conf_thread.c:1108): no worker threads are created, mixing stays in the
  * sound device's get_frame() thread, and conf_thread_prio, which only applies
  * to workers, does nothing.
  * What an application can observe is timing. The parallel bridge applies
  * queued connect/disconnect/remove operations after the tick's mix
- * (conf_thread.c:3900-3907), where conference.c applied them before it
- * (conference.c:3238-3243), so they take effect one frame (20 ms) later. And a
+ * (conf_thread.c:3929-3936), where conference.c applied them before it
+ * (conference.c:3266-3273), so they take effect one frame (20 ms) later. And a
  * hangup's BYE now leaves before the call's port has left the bridge; on
  * 0.2.1 it left after. In a live suite four calls tore down in 11 ms instead of
  * ~330 ms, while each call slot stays taken until its BYE transaction ends, so
@@ -250,5 +269,4 @@
  *   PJMEDIA_STREAM_ENABLE_KA — RTP keep-alive. Transmitter only; it does NOT
  *     buy media-liveness detection. Undecided; enable if NAT bindings are
  *     observed expiring mid-call.
- *   Opus — absent, see docs/Codec-Coverage.md. Separate branch, separate task.
  * ------------------------------------------------------------------------- */
