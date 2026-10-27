@@ -231,12 +231,13 @@ verify_slice() {
     check_defined "$slice" "pjmedia_codec_opus_init"      "PJSIP Opus codec wrapper built (PJMEDIA_HAS_OPUS_CODEC)"
     check_defined "$slice" "opus_repacketizer_get_size"   "libopus implementation folded into archive"
 
-    # VP8+VP9 via libvpx (--with-vpx + PJMEDIA_HAS_VPX_CODEC*). The second
-    # symbol is the libvpx codec interface configure links against; VP9 is the
-    # one config_site turns on past upstream's default, so its interface
-    # symbol is the honest probe that the pair landed.
+    # VP8+VP9 via libvpx (--with-vpx + PJMEDIA_HAS_VPX_CODEC*). The wrapper
+    # binds both codec interfaces, so both are asserted: VP8 is what configure
+    # links against, VP9 is the one config_site turns on past upstream's
+    # default. Either missing would be an unresolved symbol at the app's link.
     check_defined "$slice" "pjmedia_codec_vpx_vid_init"   "PJSIP VPX codec wrapper built (PJMEDIA_HAS_VPX_CODEC)"
-    check_defined "$slice" "vpx_codec_vp9_cx"             "libvpx implementation folded into archive (VP9 on)"
+    check_defined "$slice" "vpx_codec_vp8_cx"             "libvpx VP8 implementation folded into archive"
+    check_defined "$slice" "vpx_codec_vp9_cx"             "libvpx VP9 implementation folded into archive (VP9 on)"
 
     # SRTP (bundled third-party, on by default)
     check_defined "$slice" "pjmedia_transport_srtp_create" "SRTP transport built"
