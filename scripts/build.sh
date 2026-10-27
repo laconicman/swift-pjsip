@@ -127,7 +127,13 @@ apply_patches() {
 # worth fixing.
 check_config_site_cites() {
     local checker="${SCRIPTS_DIR}/check-cites.sh"
-    if "${checker}" "${CONFIG_SITE}" "${BUILD_ROOT}/pjproject"; then
+    # The header also names the commit its numbers are for; the extracted archive
+    # carries no .git, so hand the checker the commit the download phase recorded.
+    # An archive= source records none, and then only the citations are checked.
+    load_meta
+    local commit_args=()
+    [[ -n "${PJSIP_COMMIT:-}" ]] && commit_args=(--commit "${PJSIP_COMMIT}")
+    if "${checker}" ${commit_args[@]+"${commit_args[@]}"} "${CONFIG_SITE}" "${BUILD_ROOT}/pjproject"; then
         return 0
     fi
     if [[ "${ALLOW_STALE_CITES}" == "1" ]]; then

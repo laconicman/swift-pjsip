@@ -16,10 +16,14 @@
 # nothing else reads them, so a reader following one can land on unrelated
 # code. build.sh runs this on the freshly extracted tree, before the patches,
 # so the header's "line references are pjproject master @ <sha>" line is a
-# claim the build checks rather than one the last manual refresh made.
+# claim the build checks rather than one the last manual refresh made: with
+# --commit, the sha named on that line must be a prefix of the commit the tree
+# was fetched from (an extracted GitHub archive carries no .git, so the caller
+# supplies the commit it recorded). A header with no citations at all fails
+# too — there is nothing to hold, and silence is not a pass.
 #
 # Usage:
-#   check-cites.sh [--tolerance N] <config_site.h> <pjproject tree>
+#   check-cites.sh [--tolerance N] [--commit SHA] <config_site.h> <pjproject tree>
 #
 # Exit 0 when every citation holds; 1 with one line per stale citation, naming
 # where the token actually is now, so the fix is a number edit. Needs only bash
@@ -28,6 +32,7 @@
 set -euo pipefail
 
 TOLERANCE=2
+COMMIT=""
 HEADER=""
 TREE=""
 
@@ -35,6 +40,8 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --tolerance)   TOLERANCE="${2:?--tolerance needs a value}"; shift 2 ;;
         --tolerance=*) TOLERANCE="${1#*=}"; shift ;;
+        --commit)      COMMIT="${2:?--commit needs a value}"; shift 2 ;;
+        --commit=*)    COMMIT="${1#*=}"; shift ;;
         -h|--help)     sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*)            echo "Unknown option: $1" >&2; exit 2 ;;
         *)
@@ -46,9 +53,28 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -n "$HEADER" && -n "$TREE" ]] || { echo "Usage: $0 [--tolerance N] <config_site.h> <pjproject tree>" >&2; exit 2; }
+[[ -n "$HEADER" && -n "$TREE" ]] || { echo "Usage: $0 [--tolerance N] [--commit SHA] <config_site.h> <pjproject tree>" >&2; exit 2; }
 [[ -f "$HEADER" ]] || { echo "Not a file: $HEADER" >&2; exit 2; }
 [[ -d "$TREE" ]]   || { echo "Not a directory: $TREE" >&2; exit 2; }
+
+failures=0
+checked=0
+
+# The header names the commit its numbers are for: "… pjproject master @ <sha>".
+# With --commit, that sha must be a prefix of the fetched commit, so a bump that
+# refreshes the numbers but not the line — or the reverse — is caught.
+if [[ -n "$COMMIT" ]]; then
+    claimed="$( { grep -o -i -E '@ [0-9a-f]{7,40}' "$HEADER" || true; } | head -1 | cut -d' ' -f2 | tr 'A-F' 'a-f')"
+    if [[ -z "$claimed" ]]; then
+        echo "STALE  $(basename "$HEADER"): names no '@ <sha>' for its line references, cannot match ${COMMIT}" >&2
+        failures=$((failures + 1))
+    elif [[ "$(echo "$COMMIT" | tr 'A-F' 'a-f')" != "$claimed"* ]]; then
+        echo "STALE  $(basename "$HEADER"): line references claim @ ${claimed}, tree is ${COMMIT}" >&2
+        failures=$((failures + 1))
+    else
+        checked=$((checked + 1))
+    fi
+fi
 
 # One citation per output line: "<lineno in header>|<file>|<start>|<end>|<token>".
 # A token is the backtick span right after the range; absent, the field is empty.
@@ -66,10 +92,10 @@ resolve() {
     find "$TREE" -type f -path "*/$1" -not -path "*/third_party/*" | sort
 }
 
-failures=0
-checked=0
+cited=0
 
 while IFS='|' read -r at file start end token; do
+    cited=$((cited + 1))
     [[ -n "${end}" ]] || end="$start"
     where="$(basename "$HEADER"):${at}"
     cite="${file}:${start}"; [[ "$end" != "$start" ]] && cite="${cite}-${end}"
@@ -105,6 +131,11 @@ while IFS='|' read -r at file start end token; do
     fi
     failures=$((failures + 1))
 done < <(extract_citations)
+
+if [[ $cited -eq 0 ]]; then
+    echo "STALE  $(basename "$HEADER"): no file:line citations found — nothing to hold, and silence is not a pass" >&2
+    failures=$((failures + 1))
+fi
 
 if [[ $failures -gt 0 ]]; then
     echo "${failures} stale citation(s), ${checked} hold — $(basename "$HEADER") vs ${TREE}" >&2
