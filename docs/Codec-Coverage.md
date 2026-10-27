@@ -8,8 +8,9 @@ repository — see ARCHITECTURE.md *Distribution*.)
 
 configure flags:
 `--disable-gsm-codec --disable-speex-codec --disable-speex-aec --enable-darwin-ssl
---enable-video --with-bcg729 --with-opus`, and `config_site.h` sets
-`PJMEDIA_HAS_BCG729 1`, `PJMEDIA_HAS_OPUS_CODEC 1`, `PJMEDIA_HAS_INTEL_IPP_CODEC_G729 0`.
+--enable-video --with-bcg729 --with-opus --with-vpx`, and `config_site.h` sets
+`PJMEDIA_HAS_BCG729 1`, `PJMEDIA_HAS_OPUS_CODEC 1`, `PJMEDIA_HAS_INTEL_IPP_CODEC_G729 0`,
+`PJMEDIA_HAS_VPX_CODEC 1`, `PJMEDIA_HAS_VPX_CODEC_VP8 1`, `PJMEDIA_HAS_VPX_CODEC_VP9 1`.
 
 ## Audio codec set
 
@@ -36,10 +37,30 @@ G.722.1 and L16 are deliberately **not** enabled: G.722.1 is Polycom Siren7 and 
 and Opus already covers the wideband case both would serve. Each is one `config_site-ios.h` line
 plus a MINOR bump per `docs/Versioning.md` if ever wanted.
 
+## Video codec set
+
+| Codec | Shipped | Note |
+|---|---|---|
+| H.264 | ✓ | VideoToolbox hardware codec (`PJMEDIA_HAS_VID_TOOLBOX_CODEC`) |
+| **VP8** | ✓ | `VP8/90000` in SDP (enumerates as `VP8/102`) via libvpx `v1.17.0`, BSD-3-Clause + the libvpx `PATENTS` grant; folded into `libpjproject.a`, headers not shipped |
+| **VP9** | ✓ | `VP9/90000` in SDP (`VP9/105`) via libvpx `v1.17.0`; upstream default is *off* (`PJMEDIA_HAS_VPX_CODEC_VP9`), enabled here so the whole royalty-free pair is on the wire |
+| openh264 | ✗ | not built; H.264 comes from VideoToolbox |
+| ffmpeg | ✗ | not built |
+
+Both VPX codecs are registered by `pjmedia_codec_vpx_vid_init` (wired in `pjsua_vid.c` under
+`PJMEDIA_HAS_VPX_CODEC`) and enumerate as `VP8/102` / `VP9/105` (encoding name + payload type;
+both are clock rate 90000 on the wire — measured by `videoCodecs()` on the shipped binary).
+Selection and priority are
+the engine's job at runtime — `pjsua_vid_codec_set_priority()`, or `videoCodecPriorities` in
+swift-pjsua — not a build knob.
+
 Verified against the binary itself — `scripts/verify-xcframework.sh` asserts per slice that
-`pjmedia_codec_opus_init` (the pjmedia wrapper, i.e. `PJMEDIA_HAS_OPUS_CODEC` was on) and
-`opus_repacketizer_get_size` (the libopus object configure probes for) are defined symbols, and
-that the GSM/Speex/G.722.1/L16 init symbols are absent.
+`pjmedia_codec_opus_init` (the pjmedia wrapper, i.e. `PJMEDIA_HAS_OPUS_CODEC` was on),
+`opus_repacketizer_get_size` (the libopus object configure probes for),
+`pjmedia_codec_vpx_vid_init` (the VPX wrapper, `PJMEDIA_HAS_VPX_CODEC`), and `vpx_codec_vp9_cx`
+(the libvpx interface configure links against — VP9 specifically, since VP8 alone would also
+satisfy the wrapper) are defined symbols, and that the GSM/Speex/G.722.1/L16 init symbols are
+absent.
 
 ## What Opus costs the consumer: clock rate
 
@@ -55,4 +76,5 @@ before bcg729
 is a `set_codec_priority` call the engine makes.
 
 - Refs: the release notes for the pinned version; PJSIP media codecs
-  <https://docs.pjsip.org/en/latest/>; Opus <https://opus-codec.org/>.
+  <https://docs.pjsip.org/en/latest/>; Opus <https://opus-codec.org/>;
+  libvpx <https://www.webmproject.org/>.

@@ -10,7 +10,7 @@
 #   - TLS backend: the Apple/Network.framework one (PJ_SSL_SOCK_IMP_APPLE) —
 #     nw_*/sec_protocol_* referenced, Secure Transport and OpenSSL absent
 #   - TLS transport, video subsystem, VideoToolbox codec, bcg729 (G.729),
-#     Opus (libopus), SRTP — all present as defined symbols
+#     Opus (libopus), libvpx (VP8+VP9), SRTP — all present as defined symbols
 #   - disabled codecs (GSM, Speex) and the never-enabled ones (G.722.1, L16)
 #     absent
 # Plus header checks: module map shape, config_site.h constants, and
@@ -231,6 +231,13 @@ verify_slice() {
     check_defined "$slice" "pjmedia_codec_opus_init"      "PJSIP Opus codec wrapper built (PJMEDIA_HAS_OPUS_CODEC)"
     check_defined "$slice" "opus_repacketizer_get_size"   "libopus implementation folded into archive"
 
+    # VP8+VP9 via libvpx (--with-vpx + PJMEDIA_HAS_VPX_CODEC*). The second
+    # symbol is the libvpx codec interface configure links against; VP9 is the
+    # one config_site turns on past upstream's default, so its interface
+    # symbol is the honest probe that the pair landed.
+    check_defined "$slice" "pjmedia_codec_vpx_vid_init"   "PJSIP VPX codec wrapper built (PJMEDIA_HAS_VPX_CODEC)"
+    check_defined "$slice" "vpx_codec_vp9_cx"             "libvpx implementation folded into archive (VP9 on)"
+
     # SRTP (bundled third-party, on by default)
     check_defined "$slice" "pjmedia_transport_srtp_create" "SRTP transport built"
 
@@ -336,6 +343,12 @@ verify_headers() {
         report "config_site.h: PJMEDIA_HAS_OPUS_CODEC 1" \
                "config_site.h: PJMEDIA_HAS_OPUS_CODEC not 1" \
                grep -Eq 'define[[:space:]]+PJMEDIA_HAS_OPUS_CODEC[[:space:]]+1' "$cs"
+        report "config_site.h: PJMEDIA_HAS_VPX_CODEC 1" \
+               "config_site.h: PJMEDIA_HAS_VPX_CODEC not 1" \
+               grep -Eq 'define[[:space:]]+PJMEDIA_HAS_VPX_CODEC[[:space:]]+1' "$cs"
+        report "config_site.h: PJMEDIA_HAS_VPX_CODEC_VP9 1" \
+               "config_site.h: PJMEDIA_HAS_VPX_CODEC_VP9 not 1" \
+               grep -Eq 'define[[:space:]]+PJMEDIA_HAS_VPX_CODEC_VP9[[:space:]]+1' "$cs"
         report "config_site.h: PJSIP_HAS_TLS_TRANSPORT 1" \
                "config_site.h: PJSIP_HAS_TLS_TRANSPORT not 1" \
                grep -Eq 'define[[:space:]]+PJSIP_HAS_TLS_TRANSPORT[[:space:]]+1' "$cs"

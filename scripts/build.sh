@@ -1,7 +1,8 @@
 #!/bin/bash
 #
-# build.sh — build PJSIP (+ bcg729 + opus) for iOS and package it as the single
-# combined PJSIP.xcframework this Swift package distributes as a release asset.
+# build.sh — build PJSIP (+ bcg729 + opus + libvpx) for iOS and package it as
+# the single combined PJSIP.xcframework this Swift package distributes as a
+# release asset.
 #
 # Follows the official PJSIP build guidance:
 #   - https://docs.pjsip.org/en/latest/get-started/ios/build_instructions.html
@@ -29,6 +30,7 @@ ALLOW_STALE_CITES="${ALLOW_STALE_CITES:-0}"
 PJSIP_SOURCE_FLAG=""
 BCG729_SOURCE_FLAG=""
 OPUS_SOURCE_FLAG=""
+VPX_SOURCE_FLAG=""
 
 # The configure flags that define this distribution: native Darwin SSL (TLS
 # via Security/Network frameworks, no OpenSSL), video, G.729 via bcg729, Opus
@@ -303,12 +305,138 @@ build_opus() {
     log_success "opus ${target} build complete"
 }
 
+build_vpx() {
+    local target="$1"
+    local arch install_path build_dir
+    arch="$(get_target_arch "$target")"
+    install_path="${BUILD_ROOT}/vpx-${target}"
+    build_dir="${BUILD_ROOT}/vpx-source/build-${target}"
+
+    log_info "Building libvpx for ${target}..."
+    rm -rf "${build_dir}" "${install_path}"
+    mkdir -p "${build_dir}"
+
+    # libvpx has its own ./configure (not CMake, not autoconf). Static, PIC,
+    # VP8+VP9 only; examples/tools/docs/tests off, as is everything that would
+    # pull extra dependencies (libyuv, webm_io). The build is out-of-tree so
+    # one source checkout serves both slices.
+    local -a vpx_flags=(
+        --enable-pic
+        --disable-examples
+        --disable-tools
+        --disable-docs
+        --disable-unit-tests
+        --disable-install-bins
+        --disable-install-docs
+        --enable-vp8
+        --enable-vp9
+        --disable-libyuv
+        --disable-webm-io
+        --disable-shared
+        --enable-static
+        "--prefix=${install_path}"
+    )
+    local -a vpx_env=()
+    if [[ "$target" == "device" ]]; then
+        # arm64-darwin-gcc is libvpx's iOS device target: it locates the
+        # iphoneos SDK itself, but pins -miphoneos-version-min to its own
+        # IOS_VERSION_MIN default (7.0). --extra-cflags lands AFTER that on the
+        # compile line, so this override wins — no patch needed.
+        vpx_flags+=(
+            --target=arm64-darwin-gcc
+            "--extra-cflags=-miphoneos-version-min=${MIN_IOS_VERSION}"
+        )
+    else
+        # libvpx ships no arm64 iphonesimulator target (only x86_64). So the
+        # build is taken on a macOS target — arm64-darwinNN-gcc keeps NEON —
+        # and retargeted: --extra-cflags appends the simulator -target and
+        # -isysroot AFTER configure's own -isysroot <macosx>, and clang honors
+        # the last of each. configure's link probes never see CFLAGS (they run
+        # "${LD} ${LDFLAGS}" and configure appends the macOS flags last), so
+        # LD is a wrapper that appends the same flags — a trailing
+        # -target/-isysroot beats what configure put in LDFLAGS.
+        local sim_sdk ld_wrapper
+        sim_sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)" \
+            || error_exit "iphonesimulator SDK not found via xcrun"
+        ld_wrapper="${build_dir}/ld-sim.sh"
+        cat > "${ld_wrapper}" <<EOF
+#!/bin/sh
+# libvpx link-probe driver for the arm64 simulator slice (see build_vpx).
+exec "$(xcrun --sdk iphonesimulator --find clang)" "\$@" \
+    -target ${arch}-apple-ios${MIN_IOS_VERSION}-simulator -isysroot "${sim_sdk}"
+EOF
+        chmod +x "${ld_wrapper}"
+        vpx_env+=("LD=${ld_wrapper}")
+        vpx_flags+=(
+            --target=arm64-darwin20-gcc
+            "--extra-cflags=-target ${arch}-apple-ios${MIN_IOS_VERSION}-simulator -isysroot ${sim_sdk}"
+        )
+    fi
+
+    (
+        cd "${build_dir}" || error_exit "cannot enter ${build_dir}"
+        env ${vpx_env[@]+"${vpx_env[@]}"} ../configure "${vpx_flags[@]}" \
+            || error_exit "libvpx configure failed for ${target}"
+        make -j "$(sysctl -n hw.ncpu 2>/dev/null || echo 4)" || error_exit "libvpx build failed"
+        make install || error_exit "libvpx installation failed"
+    )
+
+    local lib="${install_path}/lib/libvpx.a"
+    [[ -f "${lib}" ]] || error_exit "libvpx.a not found at ${install_path}/lib/"
+    [[ -f "${install_path}/include/vpx/vpx_encoder.h" ]] \
+        || error_exit "vpx/vpx_encoder.h not installed under ${install_path}/include/"
+
+    # A wrong-platform libvpx.a surfaces only deep inside pjproject's configure
+    # link test ("VPX usability... no"), nowhere near the real cause — so the
+    # slice's arch, platform tag and minos are asserted here, while the target
+    # is still known. Mirrors verify-xcframework.sh's LC_BUILD_VERSION check.
+    local archs bv platform minos expected_platform
+    archs="$(xcrun lipo -archs "${lib}" 2>/dev/null || echo '?')"
+    [[ "$archs" == "$arch" ]] \
+        || error_exit "libvpx.a arch: expected ${arch}, got '${archs}'"
+    expected_platform="IOS"
+    [[ "$target" == "simulator" ]] && expected_platform="IOSSIMULATOR"
+    bv="$(xcrun otool -l "${lib}" 2>/dev/null \
+        | grep -m1 -A4 'LC_BUILD_VERSION' || true)"
+    platform="$(echo "$bv" | awk '/platform/ {print $2; exit}')"
+    minos="$(echo "$bv" | awk '/minos/ {print $2; exit}')"
+    case "$expected_platform" in
+        IOS)
+            [[ "$platform" == "2" || "$platform" == "IOS" || "$platform" == "PLATFORM_IOS" ]] \
+                || error_exit "libvpx.a platform: expected iOS device, got '${platform}'" ;;
+        IOSSIMULATOR)
+            [[ "$platform" == "7" || "$platform" == "IOSSIMULATOR" || "$platform" == "PLATFORM_IOSSIMULATOR" ]] \
+                || error_exit "libvpx.a platform: expected iOS simulator, got '${platform}'" ;;
+    esac
+    [[ "$minos" == "${MIN_IOS_VERSION}" ]] \
+        || error_exit "libvpx.a minos: expected ${MIN_IOS_VERSION}, got '${minos}'"
+
+    # NEON is not optional: a scalar VP9 encoder is useless on arm64.
+    grep -q '^#define HAVE_NEON 1' "${build_dir}/vpx_config.h" \
+        || error_exit "libvpx configured without NEON (${build_dir}/vpx_config.h)"
+
+    # The four codec interfaces pjmedia's wrapper binds — their absence would
+    # mean a codec silently configured out. (nm goes through a file, not a pipe
+    # to grep -q: with pipefail on, grep's early exit would SIGPIPE nm and
+    # report a found symbol as missing.)
+    local sym vpx_syms
+    vpx_syms="${build_dir}/.vpx-symbols"
+    xcrun nm -gUj "${lib}" 2>/dev/null > "${vpx_syms}" || true
+    for sym in vpx_codec_vp8_cx vpx_codec_vp8_dx vpx_codec_vp9_cx vpx_codec_vp9_dx; do
+        grep -qx "_${sym}" "${vpx_syms}" \
+            || error_exit "libvpx.a missing _${sym} (${target})"
+    done
+
+    log_success "libvpx ${target} build complete"
+}
+
 build_pjsip() {
     local target="$1"
-    local arch bcg729_path opus_path output_dir
+    local arch bcg729_path opus_path vpx_path output_dir
     arch="$(get_target_arch "$target")"
     bcg729_path="${BUILD_ROOT}/bcg729-${target}"
     opus_path="${BUILD_ROOT}/opus-${target}"
+    vpx_path="${BUILD_ROOT}/vpx-${target}"
     output_dir="${BUILD_ROOT}/${target}"
 
     log_info "Building PJSIP for ${target}..."
@@ -344,6 +472,7 @@ build_pjsip() {
             "${CONFIGURE_FLAGS[@]}" \
             --with-bcg729="${bcg729_path}" \
             --with-opus="${opus_path}" \
+            --with-vpx="${vpx_path}" \
             ${EXTRA_CONFIGURE_FLAGS:-} \
             2>&1 | tee "${configure_log}" \
             || error_exit "PJSIP configure failed"
@@ -369,6 +498,14 @@ build_pjsip() {
             error_exit "configure did not confirm opus ('OPUS library found, OPUS support enabled' missing). Check ${configure_log}."
         fi
 
+        # aconfigure.ac's VPX section is AC_MSG_CHECKING([VPX usability]) +
+        # AC_MSG_RESULT(yes|no), so the log line is 'checking VPX usability...
+        # yes'. The "no" case is silent too — exactly what a wrong-platform
+        # libvpx.a produces, which is why build_vpx asserts the slice itself.
+        if ! grep -qE "VPX usability\.\.\. (yes|ok)" "${configure_log}"; then
+            error_exit "configure did not confirm VPX ('VPX usability... yes' missing). Check ${configure_log}."
+        fi
+
         # NOT checked here: TLS. "Checking if SSL support is disabled... yes" in
         # the log refers to OpenSSL and is EXPECTED — we ship none. Nor does
         # --enable-darwin-ssl prove anything: AC_ARG_ENABLE(darwin-ssl) acts only
@@ -392,12 +529,14 @@ build_pjsip() {
     cp -R "${bcg729_path}/." "${output_dir}/bcg729/" 2>/dev/null || true
     mkdir -p "${output_dir}/opus"
     cp -R "${opus_path}/." "${output_dir}/opus/" 2>/dev/null || true
+    mkdir -p "${output_dir}/vpx"
+    cp -R "${vpx_path}/." "${output_dir}/vpx/" 2>/dev/null || true
 
     log_success "PJSIP ${target} build complete"
 }
 
 # Merge every static lib in a build tree (all pjproject libs + third_party +
-# bcg729 + opus) into ONE libpjproject.a. libtool is the supported macOS tool
+# bcg729 + opus + libvpx) into ONE libpjproject.a. libtool is the supported macOS tool
 # for combining archives; benign "same member name" warnings are kept in a log
 # (the linker resolves by symbol).
 combine_merge_libs() {
@@ -421,6 +560,13 @@ combine_merge_libs() {
         error_exit "libopus.a not found for ${target}; run the deps phase first"
     fi
 
+    # libvpx likewise: it is the VP8/VP9 implementation this release ships.
+    if [[ -f "${BUILD_ROOT}/${target}/vpx/lib/libvpx.a" ]]; then
+        libs+=("${BUILD_ROOT}/${target}/vpx/lib/libvpx.a")
+    else
+        error_exit "libvpx.a not found for ${target}; run the deps phase first"
+    fi
+
     [[ ${#libs[@]} -gt 0 ]] || error_exit "No static libraries found for ${target}"
 
     log_info "Merging ${#libs[@]} static libs -> ${out}"
@@ -440,18 +586,21 @@ phase_download() {
     log_info "=== DOWNLOAD PHASE ==="
     check_download_prerequisites
 
-    local pjsip_spec bcg729_spec opus_spec
+    local pjsip_spec bcg729_spec opus_spec vpx_spec
     pjsip_spec="$(resolve_source_spec "PJSIP" "${PJSIP_SOURCE_FLAG}" "PJSIP_SOURCE" "Latest GitHub release")"
     bcg729_spec="$(resolve_source_spec "bcg729" "${BCG729_SOURCE_FLAG}" "BCG729_SOURCE" "Latest tagged release")"
     opus_spec="$(resolve_source_spec "opus" "${OPUS_SOURCE_FLAG}" "OPUS_SOURCE" "Latest tag")"
+    vpx_spec="$(resolve_source_spec "libvpx" "${VPX_SOURCE_FLAG}" "VPX_SOURCE" "Latest tag")"
 
     log_info "PJSIP source:  ${pjsip_spec}"
     log_info "bcg729 source: ${bcg729_spec}"
     log_info "opus source:   ${opus_spec}"
+    log_info "libvpx source: ${vpx_spec}"
 
     fetch_pjsip_source "$pjsip_spec"
     fetch_bcg729_source "$bcg729_spec"
     fetch_opus_source "$opus_spec"
+    fetch_vpx_source "$vpx_spec"
     ensure_pjproject_tree   # patches + config_site, same path every build phase takes
 
     log_success "Download phase complete"
@@ -464,10 +613,14 @@ phase_deps() {
         || error_exit "bcg729 source not found. Run the download phase first."
     [[ -d "${BUILD_ROOT}/opus-source" ]] \
         || error_exit "opus source not found. Run the download phase first."
+    [[ -d "${BUILD_ROOT}/vpx-source" ]] \
+        || error_exit "libvpx source not found. Run the download phase first."
     build_bcg729 "device"
     build_bcg729 "simulator"
     build_opus "device"
     build_opus "simulator"
+    build_vpx "device"
+    build_vpx "simulator"
     log_success "Dependencies phase complete"
 }
 
@@ -478,6 +631,8 @@ phase_device() {
         || error_exit "bcg729 device build not found. Run the deps phase first."
     [[ -d "${BUILD_ROOT}/opus-device" ]] \
         || error_exit "opus device build not found. Run the deps phase first."
+    [[ -d "${BUILD_ROOT}/vpx-device" ]] \
+        || error_exit "libvpx device build not found. Run the deps phase first."
     build_pjsip "device"
     log_success "Device build phase complete"
 }
@@ -489,6 +644,8 @@ phase_simulator() {
         || error_exit "bcg729 simulator build not found. Run the deps phase first."
     [[ -d "${BUILD_ROOT}/opus-simulator" ]] \
         || error_exit "opus simulator build not found. Run the deps phase first."
+    [[ -d "${BUILD_ROOT}/vpx-simulator" ]] \
+        || error_exit "libvpx simulator build not found. Run the deps phase first."
     # Re-extract fresh: never mix device and simulator build artifacts.
     if [[ -d "${BUILD_ROOT}/pjproject" ]]; then
         log_info "Removing pjproject tree for a clean simulator build..."
@@ -568,9 +725,9 @@ phase_package() {
 #   lib = `-library .a -headers <dir>`, one .a per platform); SwiftPM
 #   duplicate-module.modulemap reports (SO 75762015, Swift Forums 87227).
 #
-# bcg729, libopus + all third_party static libs are FOLDED into libpjproject.a
-# so the artifact is self-contained; the linker dead-strips unused objects at
-# the consuming app's link step.
+# bcg729, libopus, libvpx + all third_party static libs are FOLDED into
+# libpjproject.a so the artifact is self-contained; the linker dead-strips
+# unused objects at the consuming app's link step.
 phase_combine() {
     log_info "=== COMBINE PHASE (single PJSIP.xcframework for SPM) ==="
     check_build_prerequisites
@@ -598,10 +755,11 @@ phase_combine() {
     if [[ -d "${BUILD_ROOT}/device/bcg729/include" ]]; then
         cp -R "${BUILD_ROOT}/device/bcg729/include/"* "${work}/Headers/"
     fi
-    # No opus headers on purpose: <pjmedia-codec/opus.h> includes only
-    # <pjmedia-codec/types.h>, and consumers never call raw libopus — shipping
-    # include/opus/ would only invite duplicate-symbol surprises with a host's
-    # own copy.
+    # No opus or vpx headers on purpose: <pjmedia-codec/opus.h> includes only
+    # <pjmedia-codec/types.h>, <pjmedia-codec/vpx.h> only <pjmedia/vid_codec.h>,
+    # and consumers never call the vendored libraries directly — shipping
+    # include/opus|vpx/ would only invite duplicate-symbol surprises with a
+    # host's own copy.
 
     # 3. Umbrella headers. Defining PJ_AUTOCONF=1 makes pj/config.h pull the
     #    autoconf headers (pj/compat/os_auto.h, m_auto.h) generated at build
@@ -773,7 +931,7 @@ EOF
         || error_exit "xcodebuild -create-xcframework failed"
 
     log_success "Combine phase complete -> ${OUTPUT_DIR}/PJSIP.xcframework"
-    log_info "Folded into libpjproject.a: all pjproject libs + third_party + bcg729 + opus (self-contained; dead-stripped at app link)."
+    log_info "Folded into libpjproject.a: all pjproject libs + third_party + bcg729 + opus + libvpx (self-contained; dead-stripped at app link)."
 }
 
 phase_verify() {
@@ -831,12 +989,13 @@ phase_notes() {
         echo "| PJSIP | \`${PJSIP_SOURCE_SPEC:-unknown}\` | \`${PJSIP_REF:-unknown}\` | \`${PJSIP_COMMIT:-unknown}\` | ${PJSIP_URL:-unknown} |"
         echo "| bcg729 | \`${BCG729_SOURCE_SPEC:-unknown}\` | \`${BCG729_REF:-unknown}\` | \`${BCG729_COMMIT:-unknown}\` | ${BCG729_URL:-unknown} |"
         echo "| opus | \`${OPUS_SOURCE_SPEC:-unknown}\` | \`${OPUS_REF:-unknown}\` | \`${OPUS_COMMIT:-unknown}\` | ${OPUS_URL:-unknown} |"
+        echo "| libvpx | \`${VPX_SOURCE_SPEC:-unknown}\` | \`${VPX_REF:-unknown}\` | \`${VPX_COMMIT:-unknown}\` | ${VPX_URL:-unknown} |"
         echo
         echo "## Build parameters"
         echo
         echo "- Slices: \`ios-arm64\` (device), \`ios-arm64-simulator\`"
         echo "- Minimum iOS: \`${MIN_IOS_VERSION:-unknown}\`"
-        echo "- configure flags: \`${BUILT_CONFIGURE_FLAGS:-${CONFIGURE_FLAGS[*]}} --with-bcg729=<bcg729 install> --with-opus=<opus install>\`"
+        echo "- configure flags: \`${BUILT_CONFIGURE_FLAGS:-${CONFIGURE_FLAGS[*]}} --with-bcg729=<bcg729 install> --with-opus=<opus install> --with-vpx=<libvpx install>\`"
         echo "- Extra configure flags: \`${EXTRA_CONFIGURE_FLAGS:-none}\`"
         echo "- LDFLAGS: \`${BASE_LDFLAGS}${EXTRA_LDFLAGS:+ ${EXTRA_LDFLAGS}}\`"
         echo
@@ -910,7 +1069,8 @@ phase_notes() {
         echo "The checks confirm, against the binary itself: arm64 slices, device/simulator"
         echo "platform tags, minimum iOS version, native Darwin SSL (Network/Security symbol"
         echo "references, no OpenSSL), TLS transport, video + VideoToolbox codec, bcg729"
-        echo "G.729, Opus, SRTP, and that disabled codecs (GSM/Speex) are absent."
+        echo "G.729, Opus, libvpx VP8+VP9, SRTP, and that disabled codecs (GSM/Speex,"
+        echo "G.722.1, L16) are absent."
     } > "${notes}"
 
     log_success "Release notes written -> ${notes}"
@@ -1046,8 +1206,8 @@ usage() {
 Usage: $0 [options] <phase> [phase ...]
 
 Phases:
-  download   Fetch PJSIP + bcg729 + opus sources (interactive source selection on a TTY)
-  deps       Build bcg729 and opus for device and simulator
+  download   Fetch PJSIP + bcg729 + opus + libvpx sources (interactive source selection on a TTY)
+  deps       Build bcg729, opus and libvpx for device and simulator
   device     Build PJSIP for iOS device (arm64)
   simulator  Build PJSIP for iOS simulator (arm64)
   combine    Create the single PJSIP.xcframework for Swift Package Manager
@@ -1064,6 +1224,7 @@ Options:
   --pjsip-source SPEC    PJSIP source: latest | tag=<tag> | branch=<name> | commit=<sha> | archive=<path>
   --bcg729-source SPEC   bcg729 source: latest | tag=<tag> | branch=<name> | archive=<path>
   --opus-source SPEC     opus source: latest | tag=<tag> | branch=<name> | commit=<sha> | archive=<path>
+  --vpx-source SPEC      libvpx source: latest | tag=<tag> | branch=<name> | commit=<sha> | archive=<path>
   -y, --non-interactive  Never prompt; unspecified sources default to 'latest'
   --min-ios VER          Minimum iOS version (default: ${MIN_IOS_VERSION})
   --config-site PATH     config_site.h to bake in (default: scripts/config_site-ios.h)
@@ -1074,7 +1235,8 @@ Options:
   --build-root DIR       Work directory (default: <repo>/.build-pjsip)
   -h, --help             Show this help
 
-Environment equivalents: PJSIP_SOURCE, BCG729_SOURCE, OPUS_SOURCE, NONINTERACTIVE=1,
+Environment equivalents: PJSIP_SOURCE, BCG729_SOURCE, OPUS_SOURCE, VPX_SOURCE,
+NONINTERACTIVE=1,
 MIN_IOS_VERSION, CONFIG_SITE, PATCHES_DIR, ALLOW_STALE_CITES=1, PJSIP_BUILD_ROOT,
 EXTRA_CONFIGURE_FLAGS, EXTRA_LDFLAGS.
 
@@ -1100,6 +1262,8 @@ main() {
             --bcg729-source=*) BCG729_SOURCE_FLAG="${1#*=}"; shift ;;
             --opus-source)     OPUS_SOURCE_FLAG="${2:?--opus-source needs a value}"; shift 2 ;;
             --opus-source=*)   OPUS_SOURCE_FLAG="${1#*=}"; shift ;;
+            --vpx-source)      VPX_SOURCE_FLAG="${2:?--vpx-source needs a value}"; shift 2 ;;
+            --vpx-source=*)    VPX_SOURCE_FLAG="${1#*=}"; shift ;;
             -y|--non-interactive) NONINTERACTIVE=1; shift ;;
             --min-ios)         MIN_IOS_VERSION="${2:?--min-ios needs a value}"; shift 2 ;;
             --min-ios=*)       MIN_IOS_VERSION="${1#*=}"; shift ;;

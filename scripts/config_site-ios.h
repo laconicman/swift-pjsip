@@ -175,6 +175,34 @@
  * pjmedia_codec_opus_set_config(). */
 #define PJMEDIA_HAS_OPUS_CODEC            1
 
+/* VP8 + VP9 via libvpx (BSD-3-Clause + the libvpx PATENTS grant; statically
+ * folded into libpjproject.a like bcg729 and opus — see docs/ARCHITECTURE.md
+ * "what is inside the archive"). Unlike Opus, upstream does not AC_DEFINE
+ * PJMEDIA_HAS_VPX_CODEC into config_auto.h — it injects -DPJMEDIA_HAS_VPX_CODEC=1
+ * on the compile line via VPX_CFLAGS (build.mak.in:198 `VPX_CFLAGS`) when the
+ * --with-vpx link test passes, so the macro comes from two places at once, at
+ * the same value. What proves libvpx was actually found and linked is the
+ * 'checking VPX usability... yes' assertion in build.sh and the verifier's
+ * symbol checks, not this macro.
+ *
+ * Registration is automatic once the macro is on:
+ * pjsua_vid.c:117-118 `pjmedia_codec_vpx_vid_init`. VP8 defaults on upstream
+ * (pjmedia-codec/config.h:716-717 `PJMEDIA_HAS_VPX_CODEC_VP8`), VP9 defaults
+ * OFF (pjmedia-codec/config.h:725-726 `PJMEDIA_HAS_VPX_CODEC_VP9`) — set to 1
+ * here so the SDP set covers the whole royalty-free pair a WebRTC peer is
+ * likely to offer. Both come out as encoding_name/90000 in
+ * pjsua_vid_enum_codecs().
+ *
+ * COST, measured on this build: libvpx.a is 2289040 B (device) /
+ * 2296032 B (simulator), 232 members, ~1.6 MB of __TEXT — the largest folded
+ * library, ~3.7x libopus. VP9 is most of that: a --disable-vp9 build is
+ * 942984 B / 119 members, so VP9 alone costs +1.35 MB. The macOS slice
+ * (config_site-macos.h, not yet shipped) can take these same three lines —
+ * libvpx has native arm64-darwinNN-gcc targets, no -target override needed. */
+#define PJMEDIA_HAS_VPX_CODEC             1
+#define PJMEDIA_HAS_VPX_CODEC_VP8         1
+#define PJMEDIA_HAS_VPX_CODEC_VP9         1
+
 /* RFC 4733 telephone-event payload type pinned to 101 (upstream default is
  * 96). WHY: legacy infrastructure on the provider side does not renegotiate
  * and expects 101; with the default, DTMF is signalled on a PT the far end
