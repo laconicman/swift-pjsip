@@ -10,7 +10,7 @@
 #   - TLS backend: the Apple/Network.framework one (PJ_SSL_SOCK_IMP_APPLE) —
 #     nw_*/sec_protocol_* referenced, Secure Transport and OpenSSL absent
 #   - TLS transport, video subsystem, VideoToolbox codec, bcg729 (G.729),
-#     SRTP — all present as defined symbols
+#     Opus (libopus), SRTP — all present as defined symbols
 #   - disabled codecs (GSM, Speex) absent
 # Plus header checks: module map shape, config_site.h constants, and
 # case-insensitive filename collisions (the macOS umbrella-clobbering bug).
@@ -224,6 +224,12 @@ verify_slice() {
     check_defined "$slice" "pjmedia_codec_bcg729_init"  "PJSIP bcg729 codec wrapper built (PJMEDIA_HAS_BCG729)"
     check_defined "$slice" "initBcg729EncoderChannel"   "bcg729 implementation folded into archive"
 
+    # Opus via libopus (--with-opus + PJMEDIA_HAS_OPUS_CODEC). The second symbol
+    # is the one configure's AC_CHECK_LIB probes — its presence proves the
+    # libopus objects, not just the pjmedia wrapper, made it into the archive.
+    check_defined "$slice" "pjmedia_codec_opus_init"      "PJSIP Opus codec wrapper built (PJMEDIA_HAS_OPUS_CODEC)"
+    check_defined "$slice" "opus_repacketizer_get_size"   "libopus implementation folded into archive"
+
     # SRTP (bundled third-party, on by default)
     check_defined "$slice" "pjmedia_transport_srtp_create" "SRTP transport built"
 
@@ -321,6 +327,9 @@ verify_headers() {
         report "config_site.h: PJMEDIA_HAS_BCG729 1" \
                "config_site.h: PJMEDIA_HAS_BCG729 not 1" \
                grep -Eq 'define[[:space:]]+PJMEDIA_HAS_BCG729[[:space:]]+1' "$cs"
+        report "config_site.h: PJMEDIA_HAS_OPUS_CODEC 1" \
+               "config_site.h: PJMEDIA_HAS_OPUS_CODEC not 1" \
+               grep -Eq 'define[[:space:]]+PJMEDIA_HAS_OPUS_CODEC[[:space:]]+1' "$cs"
         report "config_site.h: PJSIP_HAS_TLS_TRANSPORT 1" \
                "config_site.h: PJSIP_HAS_TLS_TRANSPORT not 1" \
                grep -Eq 'define[[:space:]]+PJSIP_HAS_TLS_TRANSPORT[[:space:]]+1' "$cs"
