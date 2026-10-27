@@ -11,7 +11,8 @@
 #     nw_*/sec_protocol_* referenced, Secure Transport and OpenSSL absent
 #   - TLS transport, video subsystem, VideoToolbox codec, bcg729 (G.729),
 #     Opus (libopus), SRTP — all present as defined symbols
-#   - disabled codecs (GSM, Speex) absent
+#   - disabled codecs (GSM, Speex) and the never-enabled ones (G.722.1, L16)
+#     absent
 # Plus header checks: module map shape, config_site.h constants, and
 # case-insensitive filename collisions (the macOS umbrella-clobbering bug).
 #
@@ -236,6 +237,11 @@ verify_slice() {
     # Codecs that were explicitly disabled at configure time
     check_absent "$slice" "pjmedia_codec_gsm_init"   "GSM codec disabled (--disable-gsm-codec)"
     check_absent "$slice" "pjmedia_codec_speex_init" "Speex codec disabled (--disable-speex-codec)"
+
+    # Codecs that are OFF by upstream default / by the PJ_CONFIG_IPHONE preset
+    # and were never re-enabled (issue #20: the docs once claimed both shipped).
+    check_absent "$slice" "pjmedia_codec_g7221_init" "G.722.1 codec off (PJMEDIA_HAS_G7221_CODEC default 0)"
+    check_absent "$slice" "pjmedia_codec_l16_init"   "L16 codec off (PJ_CONFIG_IPHONE preset disables it)"
 
     # PJSUA2 C++ API (mangled C++ symbols, e.g. pj::Endpoint)
     if grep -q 'N2pj8Endpoint' "$TMP/$slice.defined"; then
