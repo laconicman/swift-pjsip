@@ -450,6 +450,16 @@ fetch_opus_source() {
             git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$ref" "$url" "$dest" \
                 || error_exit "Failed to clone opus at ${kind} '${ref}'"
             ;;
+        commit=*)
+            # `clone --branch` takes no SHA; fetch the one commit into an empty
+            # repo instead (GitHub serves reachable SHAs to a depth-1 fetch).
+            ref="${spec#commit=}"; kind="commit"
+            if ! { git init --quiet "$dest" \
+                    && git -C "$dest" fetch --quiet --depth 1 "$url" "$ref" \
+                    && git -C "$dest" -c advice.detachedHead=false checkout --quiet FETCH_HEAD; }; then
+                error_exit "Failed to fetch opus commit '${ref}'"
+            fi
+            ;;
         archive=*)
             local archive="${spec#archive=}"
             [[ -f "$archive" ]] || error_exit "opus archive not found: ${archive}"

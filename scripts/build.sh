@@ -1024,7 +1024,7 @@ Phases:
 Options:
   --pjsip-source SPEC    PJSIP source: latest | tag=<tag> | branch=<name> | commit=<sha> | archive=<path>
   --bcg729-source SPEC   bcg729 source: latest | tag=<tag> | branch=<name> | archive=<path>
-  --opus-source SPEC     opus source: latest | tag=<tag> | branch=<name> | archive=<path>
+  --opus-source SPEC     opus source: latest | tag=<tag> | branch=<name> | commit=<sha> | archive=<path>
   -y, --non-interactive  Never prompt; unspecified sources default to 'latest'
   --min-ios VER          Minimum iOS version (default: ${MIN_IOS_VERSION})
   --config-site PATH     config_site.h to bake in (default: scripts/config_site-ios.h)
