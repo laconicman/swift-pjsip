@@ -25,6 +25,7 @@ OUTPUT_DIR="${BUILD_ROOT}/output"
 # Upstream coordinates.
 PJSIP_GH_REPO="pjsip/pjproject"
 BCG729_GH_REPO="BelledonneCommunications/bcg729"
+OPUS_GH_REPO="xiph/opus"
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -87,7 +88,7 @@ check_build_prerequisites() {
         error_exit "iPhoneOS platform not found under ${dev_dir}. Is the active developer dir a full Xcode?"
     fi
 
-    command -v cmake &>/dev/null || error_exit "cmake not found (needed for bcg729). Install: brew install cmake"
+    command -v cmake &>/dev/null || error_exit "cmake not found (needed for bcg729 and opus). Install: brew install cmake"
     xcrun --find libtool &>/dev/null || error_exit "libtool not found via xcrun."
     xcrun --find lipo    &>/dev/null || error_exit "lipo not found via xcrun."
 
@@ -184,7 +185,7 @@ gh_ref_commit() {
 # real identity is the upstream tree it was built from, and only a SHA pins it.
 #
 # Specs come from (highest precedence first): CLI flag, environment variable
-# (PJSIP_SOURCE / BCG729_SOURCE), interactive prompt, default "latest".
+# (PJSIP_SOURCE / BCG729_SOURCE / OPUS_SOURCE), interactive prompt, default "latest".
 # Prompts only appear on a TTY and never with --non-interactive.
 # ---------------------------------------------------------------------------
 
@@ -416,6 +417,78 @@ fetch_bcg729_source() {
     } > "${META_DIR}/bcg729-source.env"
 }
 
+# Fetch opus per spec into ${BUILD_ROOT}/opus-source, record provenance.
+# `latest` resolves via the highest version-sorted TAG, never the latest GitHub
+# Release object: opus's release objects lag the tags (the API has sat at 1.5.2
+# while the xiph tarball index and the tags were already at 1.6.1), so
+# gh_latest_release_tag would pin a stale libopus.
+fetch_opus_source() {
+    local spec="$1"
+    local kind ref commit="" url="https://github.com/${OPUS_GH_REPO}.git"
+    local dest="${BUILD_ROOT}/opus-source"
+
+    mkdir -p "${BUILD_ROOT}"
+    rm -rf "$dest"
+
+    case "$spec" in
+        latest)
+            ref="$(gh_latest_tag "${OPUS_GH_REPO}")"
+            if [[ -n "$ref" ]]; then
+                kind="tag"
+                log_info "Latest opus tag: ${ref}"
+                git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$ref" "$url" "$dest" \
+                    || error_exit "Failed to clone opus at ${ref}"
+            else
+                log_warn "No opus tag resolvable; falling back to default branch HEAD."
+                kind="branch"; ref="HEAD"
+                git clone --quiet --depth 1 "$url" "$dest" || error_exit "Failed to clone opus"
+            fi
+            ;;
+        tag=*|branch=*)
+            ref="${spec#*=}"
+            kind="${spec%%=*}"
+            git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$ref" "$url" "$dest" \
+                || error_exit "Failed to clone opus at ${kind} '${ref}'"
+            ;;
+        commit=*)
+            # `clone --branch` takes no SHA; fetch the one commit into an empty
+            # repo instead (GitHub serves reachable SHAs to a depth-1 fetch).
+            ref="${spec#commit=}"; kind="commit"
+            if ! { git init --quiet "$dest" \
+                    && git -C "$dest" fetch --quiet --depth 1 "$url" "$ref" \
+                    && git -C "$dest" -c advice.detachedHead=false checkout --quiet FETCH_HEAD; }; then
+                error_exit "Failed to fetch opus commit '${ref}'"
+            fi
+            ;;
+        archive=*)
+            local archive="${spec#archive=}"
+            [[ -f "$archive" ]] || error_exit "opus archive not found: ${archive}"
+            kind="archive"; ref="$(basename "$archive")"
+            local top
+            top="$(extract_archive_to "$archive" "${BUILD_ROOT}/.extract-opus")"
+            mv "$top" "$dest"
+            rm -rf "${BUILD_ROOT}/.extract-opus"
+            ;;
+    esac
+
+    if [[ -d "${dest}/.git" ]]; then
+        commit="$(git -C "$dest" rev-parse HEAD 2>/dev/null || true)"
+    fi
+    [[ -f "${dest}/CMakeLists.txt" && -f "${dest}/include/opus.h" ]] \
+        || error_exit "Extracted tree does not look like opus (CMakeLists.txt or include/opus.h missing)."
+    log_success "opus source ready: ${dest}"
+
+    mkdir -p "${META_DIR}"
+    {
+        echo "OPUS_SOURCE_SPEC=\"${spec}\""
+        echo "OPUS_SOURCE_KIND=\"${kind}\""
+        echo "OPUS_REF=\"${ref}\""
+        echo "OPUS_COMMIT=\"${commit}\""
+        echo "OPUS_URL=\"${url}\""
+        echo "OPUS_FETCH_DATE=\"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\""
+    } > "${META_DIR}/opus-source.env"
+}
+
 # ---------------------------------------------------------------------------
 # Metadata helpers
 # ---------------------------------------------------------------------------
@@ -455,7 +528,7 @@ record_build_env() {
 load_meta() {
     local f
     for f in "${META_DIR}/pjsip-source.env" "${META_DIR}/bcg729-source.env" \
-             "${META_DIR}/build-device.env"; do
+             "${META_DIR}/opus-source.env" "${META_DIR}/build-device.env"; do
         # Variable, build-time-generated path: there's nothing for shellcheck to
         # follow (SC1090, the dynamic-source variant of SC1091).
         # shellcheck disable=SC1090
@@ -480,6 +553,7 @@ clean_target() {
     local target="$1"
     log_info "Cleaning ${target} build artifacts..."
     rm -rf "${BUILD_ROOT:?}/${target}" "${BUILD_ROOT:?}/bcg729-${target}" \
-           "${BUILD_ROOT:?}/bcg729-source/build-${target}"
+           "${BUILD_ROOT:?}/bcg729-source/build-${target}" \
+           "${BUILD_ROOT:?}/opus-${target}" "${BUILD_ROOT:?}/opus-source/build-${target}"
     log_success "Cleaned ${target}"
 }

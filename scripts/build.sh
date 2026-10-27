@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# build.sh — build PJSIP (+ bcg729) for iOS and package it as the single
+# build.sh — build PJSIP (+ bcg729 + opus) for iOS and package it as the single
 # combined PJSIP.xcframework this Swift package distributes as a release asset.
 #
 # Follows the official PJSIP build guidance:
@@ -27,10 +27,12 @@ PATCHES_DIR="${PATCHES_DIR:-${SCRIPTS_DIR}/patches}"
 NONINTERACTIVE="${NONINTERACTIVE:-0}"
 PJSIP_SOURCE_FLAG=""
 BCG729_SOURCE_FLAG=""
+OPUS_SOURCE_FLAG=""
 
 # The configure flags that define this distribution: native Darwin SSL (TLS
-# via Security/Network frameworks, no OpenSSL), video, G.729 via bcg729,
-# and no GSM/Speex. Changing these changes the ABI story documented in the
+# via Security/Network frameworks, no OpenSSL), video, G.729 via bcg729, Opus
+# via libopus (--with-* live on the configure line, not here), and no
+# GSM/Speex. Changing these changes the ABI story documented in the
 # README — regenerate the release notes (`notes`) and re-verify (`verify`).
 CONFIGURE_FLAGS=(
     --disable-gsm-codec
@@ -195,11 +197,79 @@ build_bcg729() {
     log_success "bcg729 ${target} build complete"
 }
 
+build_opus() {
+    local target="$1"
+    local arch sdk install_path build_dir
+    arch="$(get_target_arch "$target")"
+    sdk="$(get_target_sdk "$target")"
+    install_path="${BUILD_ROOT}/opus-${target}"
+    build_dir="${BUILD_ROOT}/opus-source/build-${target}"
+
+    log_info "Building opus for ${target}..."
+    rm -rf "${build_dir}" "${install_path}"
+    mkdir -p "${build_dir}"
+
+    # CMAKE_OSX_SYSROOT takes the SDK *name*; CMake resolves the actual path
+    # through xcrun, so nothing here depends on where Xcode is installed.
+    # Float build with intrinsics (arm64 NEON) is opus's own default; DRED/OSCE
+    # stay off (also defaults). The OPUS_INSTALL_* switches keep the prefix to
+    # just lib/ + include/ — nothing else consumes them.
+    (
+        cd "${build_dir}" || error_exit "cannot enter ${build_dir}"
+        cmake .. \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES="${arch}" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="${MIN_IOS_VERSION}" \
+            -DCMAKE_OSX_SYSROOT="${sdk}" \
+            -DCMAKE_INSTALL_PREFIX="${install_path}" \
+            -DCMAKE_SKIP_INSTALL_RPATH=ON \
+            -DOPUS_BUILD_SHARED_LIBRARY=OFF \
+            -DOPUS_BUILD_PROGRAMS=OFF \
+            -DOPUS_BUILD_TESTING=OFF \
+            -DOPUS_INSTALL_PKG_CONFIG_MODULE=OFF \
+            -DOPUS_INSTALL_CMAKE_CONFIG_MODULE=OFF \
+            || error_exit "opus CMake configuration failed"
+        make -j "$(sysctl -n hw.ncpu 2>/dev/null || echo 4)" || error_exit "opus build failed"
+        make install || error_exit "opus installation failed"
+    )
+
+    [[ -f "${install_path}/lib/libopus.a" ]] \
+        || error_exit "libopus.a not found at ${install_path}/lib/"
+
+    # A wrong-platform libopus.a surfaces only deep inside configure's link
+    # test ("OPUS library not found"), nowhere near the real cause — so the
+    # slice's arch, platform tag and minos are asserted here, while the target
+    # is still known. Mirrors verify-xcframework.sh's LC_BUILD_VERSION check.
+    local archs bv platform minos expected_platform
+    archs="$(xcrun lipo -archs "${install_path}/lib/libopus.a" 2>/dev/null || echo '?')"
+    [[ "$archs" == "$arch" ]] \
+        || error_exit "libopus.a arch: expected ${arch}, got '${archs}'"
+    expected_platform="IOS"
+    [[ "$target" == "simulator" ]] && expected_platform="IOSSIMULATOR"
+    bv="$(xcrun otool -l "${install_path}/lib/libopus.a" 2>/dev/null \
+        | grep -m1 -A4 'LC_BUILD_VERSION' || true)"
+    platform="$(echo "$bv" | awk '/platform/ {print $2; exit}')"
+    minos="$(echo "$bv" | awk '/minos/ {print $2; exit}')"
+    case "$expected_platform" in
+        IOS)
+            [[ "$platform" == "2" || "$platform" == "IOS" || "$platform" == "PLATFORM_IOS" ]] \
+                || error_exit "libopus.a platform: expected iOS device, got '${platform}'" ;;
+        IOSSIMULATOR)
+            [[ "$platform" == "7" || "$platform" == "IOSSIMULATOR" || "$platform" == "PLATFORM_IOSSIMULATOR" ]] \
+                || error_exit "libopus.a platform: expected iOS simulator, got '${platform}'" ;;
+    esac
+    [[ "$minos" == "${MIN_IOS_VERSION}" ]] \
+        || error_exit "libopus.a minos: expected ${MIN_IOS_VERSION}, got '${minos}'"
+
+    log_success "opus ${target} build complete"
+}
+
 build_pjsip() {
     local target="$1"
-    local arch bcg729_path output_dir
+    local arch bcg729_path opus_path output_dir
     arch="$(get_target_arch "$target")"
     bcg729_path="${BUILD_ROOT}/bcg729-${target}"
+    opus_path="${BUILD_ROOT}/opus-${target}"
     output_dir="${BUILD_ROOT}/${target}"
 
     log_info "Building PJSIP for ${target}..."
@@ -234,6 +304,7 @@ build_pjsip() {
         ./configure-iphone \
             "${CONFIGURE_FLAGS[@]}" \
             --with-bcg729="${bcg729_path}" \
+            --with-opus="${opus_path}" \
             ${EXTRA_CONFIGURE_FLAGS:-} \
             2>&1 | tee "${configure_log}" \
             || error_exit "PJSIP configure failed"
@@ -249,6 +320,14 @@ build_pjsip() {
         # not by this one.)
         if ! grep -qE "bcg729 usability\.\.\. (yes|ok)" "${configure_log}"; then
             error_exit "configure did not confirm bcg729 ('bcg729 usability... yes' missing). Check ${configure_log}."
+        fi
+
+        # Literal AC_MSG_RESULT from aconfigure.ac's opus section. The failure
+        # branch prints 'OPUS library not found, OPUS support disabled' —
+        # which is exactly what a wrong-platform libopus.a produces, so
+        # build_opus asserts the slice's platform/minos itself.
+        if ! grep -qF "OPUS library found, OPUS support enabled" "${configure_log}"; then
+            error_exit "configure did not confirm opus ('OPUS library found, OPUS support enabled' missing). Check ${configure_log}."
         fi
 
         # NOT checked here: TLS. "Checking if SSL support is disabled... yes" in
@@ -272,13 +351,15 @@ build_pjsip() {
     mv "${BUILD_ROOT}/pjproject" "${output_dir}/pjproject"
     mkdir -p "${output_dir}/bcg729"
     cp -R "${bcg729_path}/." "${output_dir}/bcg729/" 2>/dev/null || true
+    mkdir -p "${output_dir}/opus"
+    cp -R "${opus_path}/." "${output_dir}/opus/" 2>/dev/null || true
 
     log_success "PJSIP ${target} build complete"
 }
 
 # Merge every static lib in a build tree (all pjproject libs + third_party +
-# bcg729) into ONE libpjproject.a. libtool is the supported macOS tool for
-# combining archives; benign "same member name" warnings are kept in a log
+# bcg729 + opus) into ONE libpjproject.a. libtool is the supported macOS tool
+# for combining archives; benign "same member name" warnings are kept in a log
 # (the linker resolves by symbol).
 combine_merge_libs() {
     local target="$1" out="$2"
@@ -291,6 +372,14 @@ combine_merge_libs() {
         libs+=("${BUILD_ROOT}/${target}/bcg729/lib/libbcg729.a")
     else
         log_warn "bcg729 static lib not found for ${target}; G.729 symbols will be missing"
+    fi
+
+    # libopus is mandatory, not a warn: the release exists for the codec, so an
+    # opus-less archive is a broken artifact, not a degraded one.
+    if [[ -f "${BUILD_ROOT}/${target}/opus/lib/libopus.a" ]]; then
+        libs+=("${BUILD_ROOT}/${target}/opus/lib/libopus.a")
+    else
+        error_exit "libopus.a not found for ${target}; run the deps phase first"
     fi
 
     [[ ${#libs[@]} -gt 0 ]] || error_exit "No static libraries found for ${target}"
@@ -312,15 +401,18 @@ phase_download() {
     log_info "=== DOWNLOAD PHASE ==="
     check_download_prerequisites
 
-    local pjsip_spec bcg729_spec
+    local pjsip_spec bcg729_spec opus_spec
     pjsip_spec="$(resolve_source_spec "PJSIP" "${PJSIP_SOURCE_FLAG}" "PJSIP_SOURCE" "Latest GitHub release")"
     bcg729_spec="$(resolve_source_spec "bcg729" "${BCG729_SOURCE_FLAG}" "BCG729_SOURCE" "Latest tagged release")"
+    opus_spec="$(resolve_source_spec "opus" "${OPUS_SOURCE_FLAG}" "OPUS_SOURCE" "Latest tag")"
 
     log_info "PJSIP source:  ${pjsip_spec}"
     log_info "bcg729 source: ${bcg729_spec}"
+    log_info "opus source:   ${opus_spec}"
 
     fetch_pjsip_source "$pjsip_spec"
     fetch_bcg729_source "$bcg729_spec"
+    fetch_opus_source "$opus_spec"
     ensure_pjproject_tree   # patches + config_site, same path every build phase takes
 
     log_success "Download phase complete"
@@ -331,8 +423,12 @@ phase_deps() {
     check_build_prerequisites
     [[ -d "${BUILD_ROOT}/bcg729-source" ]] \
         || error_exit "bcg729 source not found. Run the download phase first."
+    [[ -d "${BUILD_ROOT}/opus-source" ]] \
+        || error_exit "opus source not found. Run the download phase first."
     build_bcg729 "device"
     build_bcg729 "simulator"
+    build_opus "device"
+    build_opus "simulator"
     log_success "Dependencies phase complete"
 }
 
@@ -341,6 +437,8 @@ phase_device() {
     check_build_prerequisites
     [[ -d "${BUILD_ROOT}/bcg729-device" ]] \
         || error_exit "bcg729 device build not found. Run the deps phase first."
+    [[ -d "${BUILD_ROOT}/opus-device" ]] \
+        || error_exit "opus device build not found. Run the deps phase first."
     build_pjsip "device"
     log_success "Device build phase complete"
 }
@@ -350,6 +448,8 @@ phase_simulator() {
     check_build_prerequisites
     [[ -d "${BUILD_ROOT}/bcg729-simulator" ]] \
         || error_exit "bcg729 simulator build not found. Run the deps phase first."
+    [[ -d "${BUILD_ROOT}/opus-simulator" ]] \
+        || error_exit "opus simulator build not found. Run the deps phase first."
     # Re-extract fresh: never mix device and simulator build artifacts.
     if [[ -d "${BUILD_ROOT}/pjproject" ]]; then
         log_info "Removing pjproject tree for a clean simulator build..."
@@ -429,9 +529,9 @@ phase_package() {
 #   lib = `-library .a -headers <dir>`, one .a per platform); SwiftPM
 #   duplicate-module.modulemap reports (SO 75762015, Swift Forums 87227).
 #
-# bcg729 + all third_party static libs are FOLDED into libpjproject.a so the
-# artifact is self-contained; the linker dead-strips unused objects at the
-# consuming app's link step.
+# bcg729, libopus + all third_party static libs are FOLDED into libpjproject.a
+# so the artifact is self-contained; the linker dead-strips unused objects at
+# the consuming app's link step.
 phase_combine() {
     log_info "=== COMBINE PHASE (single PJSIP.xcframework for SPM) ==="
     check_build_prerequisites
@@ -459,6 +559,10 @@ phase_combine() {
     if [[ -d "${BUILD_ROOT}/device/bcg729/include" ]]; then
         cp -R "${BUILD_ROOT}/device/bcg729/include/"* "${work}/Headers/"
     fi
+    # No opus headers on purpose: <pjmedia-codec/opus.h> includes only
+    # <pjmedia-codec/types.h>, and consumers never call raw libopus — shipping
+    # include/opus/ would only invite duplicate-symbol surprises with a host's
+    # own copy.
 
     # 3. Umbrella headers. Defining PJ_AUTOCONF=1 makes pj/config.h pull the
     #    autoconf headers (pj/compat/os_auto.h, m_auto.h) generated at build
@@ -630,7 +734,7 @@ EOF
         || error_exit "xcodebuild -create-xcframework failed"
 
     log_success "Combine phase complete -> ${OUTPUT_DIR}/PJSIP.xcframework"
-    log_info "Folded into libpjproject.a: all pjproject libs + third_party + bcg729 (self-contained; dead-stripped at app link)."
+    log_info "Folded into libpjproject.a: all pjproject libs + third_party + bcg729 + opus (self-contained; dead-stripped at app link)."
 }
 
 phase_verify() {
@@ -687,12 +791,13 @@ phase_notes() {
         echo "|-----------|-----------|--------------|--------|--------|"
         echo "| PJSIP | \`${PJSIP_SOURCE_SPEC:-unknown}\` | \`${PJSIP_REF:-unknown}\` | \`${PJSIP_COMMIT:-unknown}\` | ${PJSIP_URL:-unknown} |"
         echo "| bcg729 | \`${BCG729_SOURCE_SPEC:-unknown}\` | \`${BCG729_REF:-unknown}\` | \`${BCG729_COMMIT:-unknown}\` | ${BCG729_URL:-unknown} |"
+        echo "| opus | \`${OPUS_SOURCE_SPEC:-unknown}\` | \`${OPUS_REF:-unknown}\` | \`${OPUS_COMMIT:-unknown}\` | ${OPUS_URL:-unknown} |"
         echo
         echo "## Build parameters"
         echo
         echo "- Slices: \`ios-arm64\` (device), \`ios-arm64-simulator\`"
         echo "- Minimum iOS: \`${MIN_IOS_VERSION:-unknown}\`"
-        echo "- configure flags: \`${BUILT_CONFIGURE_FLAGS:-${CONFIGURE_FLAGS[*]}} --with-bcg729=<bcg729 install>\`"
+        echo "- configure flags: \`${BUILT_CONFIGURE_FLAGS:-${CONFIGURE_FLAGS[*]}} --with-bcg729=<bcg729 install> --with-opus=<opus install>\`"
         echo "- Extra configure flags: \`${EXTRA_CONFIGURE_FLAGS:-none}\`"
         echo "- LDFLAGS: \`${BASE_LDFLAGS}${EXTRA_LDFLAGS:+ ${EXTRA_LDFLAGS}}\`"
         echo
@@ -730,7 +835,7 @@ phase_notes() {
         echo "| iPhoneOS SDK | ${SDK_IPHONEOS:-unknown} |"
         echo "| iPhoneSimulator SDK | ${SDK_IPHONESIMULATOR:-unknown} |"
         echo "| clang | ${CLANG_VERSION:-unknown} |"
-        echo "| CMake (bcg729) | ${CMAKE_VERSION:-unknown} |"
+        echo "| CMake (bcg729, opus) | ${CMAKE_VERSION:-unknown} |"
         echo
         echo "## Artifacts"
         echo
@@ -766,7 +871,7 @@ phase_notes() {
         echo "The checks confirm, against the binary itself: arm64 slices, device/simulator"
         echo "platform tags, minimum iOS version, native Darwin SSL (Network/Security symbol"
         echo "references, no OpenSSL), TLS transport, video + VideoToolbox codec, bcg729"
-        echo "G.729, SRTP, and that disabled codecs (GSM/Speex) are absent."
+        echo "G.729, Opus, SRTP, and that disabled codecs (GSM/Speex) are absent."
     } > "${notes}"
 
     log_success "Release notes written -> ${notes}"
@@ -902,8 +1007,8 @@ usage() {
 Usage: $0 [options] <phase> [phase ...]
 
 Phases:
-  download   Fetch PJSIP + bcg729 sources (interactive source selection on a TTY)
-  deps       Build bcg729 for device and simulator
+  download   Fetch PJSIP + bcg729 + opus sources (interactive source selection on a TTY)
+  deps       Build bcg729 and opus for device and simulator
   device     Build PJSIP for iOS device (arm64)
   simulator  Build PJSIP for iOS simulator (arm64)
   combine    Create the single PJSIP.xcframework for Swift Package Manager
@@ -919,6 +1024,7 @@ Phases:
 Options:
   --pjsip-source SPEC    PJSIP source: latest | tag=<tag> | branch=<name> | commit=<sha> | archive=<path>
   --bcg729-source SPEC   bcg729 source: latest | tag=<tag> | branch=<name> | archive=<path>
+  --opus-source SPEC     opus source: latest | tag=<tag> | branch=<name> | commit=<sha> | archive=<path>
   -y, --non-interactive  Never prompt; unspecified sources default to 'latest'
   --min-ios VER          Minimum iOS version (default: ${MIN_IOS_VERSION})
   --config-site PATH     config_site.h to bake in (default: scripts/config_site-ios.h)
@@ -927,7 +1033,7 @@ Options:
   --build-root DIR       Work directory (default: <repo>/.build-pjsip)
   -h, --help             Show this help
 
-Environment equivalents: PJSIP_SOURCE, BCG729_SOURCE, NONINTERACTIVE=1,
+Environment equivalents: PJSIP_SOURCE, BCG729_SOURCE, OPUS_SOURCE, NONINTERACTIVE=1,
 MIN_IOS_VERSION, CONFIG_SITE, PATCHES_DIR, PJSIP_BUILD_ROOT, EXTRA_CONFIGURE_FLAGS,
 EXTRA_LDFLAGS.
 
@@ -951,6 +1057,8 @@ main() {
             --pjsip-source=*)  PJSIP_SOURCE_FLAG="${1#*=}"; shift ;;
             --bcg729-source)   BCG729_SOURCE_FLAG="${2:?--bcg729-source needs a value}"; shift 2 ;;
             --bcg729-source=*) BCG729_SOURCE_FLAG="${1#*=}"; shift ;;
+            --opus-source)     OPUS_SOURCE_FLAG="${2:?--opus-source needs a value}"; shift 2 ;;
+            --opus-source=*)   OPUS_SOURCE_FLAG="${1#*=}"; shift ;;
             -y|--non-interactive) NONINTERACTIVE=1; shift ;;
             --min-ios)         MIN_IOS_VERSION="${2:?--min-ios needs a value}"; shift 2 ;;
             --min-ios=*)       MIN_IOS_VERSION="${1#*=}"; shift ;;
