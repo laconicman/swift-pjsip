@@ -22,7 +22,8 @@ its default. What did change is the conference bridge, below.
 `scripts/config_site-ios.h` starts from `PJ_CONFIG_IPHONE` + `config_site_sample.h` and sets: video
 on (`PJMEDIA_HAS_VIDEO`, iOS video device, VideoToolbox codec), UDP/TCP/TLS transports with
 `PJ_SSL_SOCK_IMP_APPLE` (deliberately, not the deprecated Darwin/SecureTransport backend), BCG729,
-Opus (`PJMEDIA_HAS_OPUS_CODEC`, since `0.4.0`),
+Opus (`PJMEDIA_HAS_OPUS_CODEC`, since `0.4.0`), VPX (`PJMEDIA_HAS_VPX_CODEC` + the VP8/VP9
+sub-gates, since `0.5.0`),
 `PJMEDIA_RTP_PT_TELEPHONE_EVENTS 101`, CoreAudio advanced ducking, and `PJSIP_MAX_PKT_LEN 16000`.
 `PJSIP_DONT_SWITCH_TO_TCP` is **not** set — it used to be, and it disabled RFC 3261 §18.1.1 outright,
 so no authenticated call could be placed over UDP.
@@ -172,6 +173,11 @@ defaults to 16 kHz (`PJSUA_DEFAULT_CLOCK_RATE`), so it resamples every frame unl
 `pjsua_media_config.clock_rate`/`snd_clock_rate` to 48000; and offer order is codec priority, so
 "prefer Opus" is `pjsua_codec_set_priority`, not a build switch. Full story:
 [Codec-Coverage](./Codec-Coverage.md).
+
+**VPX is on since `0.5.0`** (`PJMEDIA_HAS_VPX_CODEC` + `PJMEDIA_HAS_VPX_CODEC_VP8` +
+`PJMEDIA_HAS_VPX_CODEC_VP9` + `--with-vpx`, libvpx `v1.17.0`) — the VP8/VP9 pair for video.
+Upstream turns VP8 on and leaves VP9 off by default; both are set here. As with Opus this is only
+the gate: codec order is `pjsua_vid_codec_set_priority()` at runtime.
 
 Relevant to quality work beyond NAT and liveness: G.711 has no published `Ie`/`Bpl` sensitivity
 problem, but G.722's E-model impairment values are not tabulated in the sources we found at all,

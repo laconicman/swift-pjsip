@@ -10,8 +10,9 @@
 #   - TLS backend: the Apple/Network.framework one (PJ_SSL_SOCK_IMP_APPLE) —
 #     nw_*/sec_protocol_* referenced, Secure Transport and OpenSSL absent
 #   - TLS transport, video subsystem, VideoToolbox codec, bcg729 (G.729),
-#     Opus (libopus), SRTP — all present as defined symbols
-#   - disabled codecs (GSM, Speex) absent
+#     Opus (libopus), libvpx (VP8+VP9), SRTP — all present as defined symbols
+#   - disabled codecs (GSM, Speex) and the never-enabled ones (G.722.1, L16)
+#     absent
 # Plus header checks: module map shape, config_site.h constants, and
 # case-insensitive filename collisions (the macOS umbrella-clobbering bug).
 #
@@ -230,12 +231,25 @@ verify_slice() {
     check_defined "$slice" "pjmedia_codec_opus_init"      "PJSIP Opus codec wrapper built (PJMEDIA_HAS_OPUS_CODEC)"
     check_defined "$slice" "opus_repacketizer_get_size"   "libopus implementation folded into archive"
 
+    # VP8+VP9 via libvpx (--with-vpx + PJMEDIA_HAS_VPX_CODEC*). The wrapper
+    # binds both codec interfaces, so both are asserted: VP8 is what configure
+    # links against, VP9 is the one config_site turns on past upstream's
+    # default. Either missing would be an unresolved symbol at the app's link.
+    check_defined "$slice" "pjmedia_codec_vpx_vid_init"   "PJSIP VPX codec wrapper built (PJMEDIA_HAS_VPX_CODEC)"
+    check_defined "$slice" "vpx_codec_vp8_cx"             "libvpx VP8 implementation folded into archive"
+    check_defined "$slice" "vpx_codec_vp9_cx"             "libvpx VP9 implementation folded into archive (VP9 on)"
+
     # SRTP (bundled third-party, on by default)
     check_defined "$slice" "pjmedia_transport_srtp_create" "SRTP transport built"
 
     # Codecs that were explicitly disabled at configure time
     check_absent "$slice" "pjmedia_codec_gsm_init"   "GSM codec disabled (--disable-gsm-codec)"
     check_absent "$slice" "pjmedia_codec_speex_init" "Speex codec disabled (--disable-speex-codec)"
+
+    # Codecs that are OFF by upstream default / by the PJ_CONFIG_IPHONE preset
+    # and were never re-enabled (issue #20: the docs once claimed both shipped).
+    check_absent "$slice" "pjmedia_codec_g7221_init" "G.722.1 codec off (PJMEDIA_HAS_G7221_CODEC default 0)"
+    check_absent "$slice" "pjmedia_codec_l16_init"   "L16 codec off (PJ_CONFIG_IPHONE preset disables it)"
 
     # PJSUA2 C++ API (mangled C++ symbols, e.g. pj::Endpoint)
     if grep -q 'N2pj8Endpoint' "$TMP/$slice.defined"; then
@@ -330,6 +344,12 @@ verify_headers() {
         report "config_site.h: PJMEDIA_HAS_OPUS_CODEC 1" \
                "config_site.h: PJMEDIA_HAS_OPUS_CODEC not 1" \
                grep -Eq 'define[[:space:]]+PJMEDIA_HAS_OPUS_CODEC[[:space:]]+1' "$cs"
+        report "config_site.h: PJMEDIA_HAS_VPX_CODEC 1" \
+               "config_site.h: PJMEDIA_HAS_VPX_CODEC not 1" \
+               grep -Eq 'define[[:space:]]+PJMEDIA_HAS_VPX_CODEC[[:space:]]+1' "$cs"
+        report "config_site.h: PJMEDIA_HAS_VPX_CODEC_VP9 1" \
+               "config_site.h: PJMEDIA_HAS_VPX_CODEC_VP9 not 1" \
+               grep -Eq 'define[[:space:]]+PJMEDIA_HAS_VPX_CODEC_VP9[[:space:]]+1' "$cs"
         report "config_site.h: PJSIP_HAS_TLS_TRANSPORT 1" \
                "config_site.h: PJSIP_HAS_TLS_TRANSPORT not 1" \
                grep -Eq 'define[[:space:]]+PJSIP_HAS_TLS_TRANSPORT[[:space:]]+1' "$cs"

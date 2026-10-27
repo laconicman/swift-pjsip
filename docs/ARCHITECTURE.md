@@ -14,7 +14,9 @@ pjsip/pjproject ────────┐
                         ├─► device + simulator →            │ Package.swift            │
 BelledonneComm/bcg729 ──┤   combine → verify → notes        │   .binaryTarget(PJSIP)   │
 (GitHub or archive)     │            │                      │ (fetched by checksum)    │
-xiph/opus ──────────────┘            │                      │                          │
+xiph/opus ──────────────┤            │                      │                          │
+(GitHub or archive)     │            │                      │                          │
+webmproject/libvpx ─────┘            │                      │                          │
 (GitHub or archive)                  │                      │                          │
                                      ▼                      │   PJSIP.xcframework      │
                             PJSIP.xcframework  ──install──► │   RELEASE-NOTES.md       │
@@ -318,8 +320,8 @@ chosen by `ls | sort | tail -1`, which is **lexicographic** (`iPhoneOS9.3` sorts
 ## What is statically inside `libpjproject.a` — and what a host must not link
 
 The artifact is **one static library per slice**, and `combine_merge_libs()` folds *everything*
-into it: every pjproject sublibrary, every third-party dependency pjproject vendors, bcg729 and
-libopus. 586 object files in the current build. Nothing else has to be linked to make PJSIP work, which is
+into it: every pjproject sublibrary, every third-party dependency pjproject vendors, bcg729,
+libopus and libvpx. 817 object files in the current build. Nothing else has to be linked to make PJSIP work, which is
 the point — but a host that links its own copy of anything below gets duplicate symbols.
 
 Confirmed by inspecting the built archive (`ar t`, `nm -gj`):
@@ -330,6 +332,7 @@ Confirmed by inspecting the built archive (`ar t`, `nm -gj`):
 | **WebRTC AEC/AECM** | `aec_core.o`, `aecm_core_neon.o`, … (429 `webrtc*` symbols) | **Conflicts** with a separate WebRTC build |
 | **bcg729** (G.729, LGPL) | `LP2LSPConversion.c.o`, `LSPQuantization.c.o`, 25 symbols | **Conflicts.** Also the one LGPL component — see below |
 | **libopus** (Opus, BSD-3-Clause) | `opus_encoder.c.o`, `opus_decoder.c.o`, `celt_*`, `silk_*` — 138 objects, 311 `opus_*`/`celt_*`/`silk_*` symbols | **Conflicts.** Do not link your own libopus |
+| **libvpx** (VP8+VP9, BSD-3-Clause) | `vp8_cx_iface.c.o`, `vp9_cx_iface.c.o`, `vp8_*`/`vp9_*`/`vpx_*` — 231 objects, ~730 `vpx*`/`vp8_*`/`vp9_*` symbols | **Conflicts.** Do not link your own libvpx |
 | **iLBC** | `FrameClassify.o`, `StateSearchW.o` | Conflicts |
 | **libyuv** | `yuv_*` | Conflicts |
 | **G.711 / G.722 tables** | `alaw_ulaw_table.o`, `g722*` | Conflicts |
@@ -337,7 +340,7 @@ Confirmed by inspecting the built archive (`ar t`, `nm -gj`):
 | **All five `ssl_sock_*` backends** | `ssl_sock_apple.o`, `ssl_sock_ossl.o`, `ssl_sock_darwin.o`, `ssl_sock_gtls.o`, `ssl_sock_mbedtls.o` | Harmless — each self-gates on `PJ_SSL_SOCK_IMP` and only the Apple one has a body |
 
 **Not** inside, deliberately: OpenSSL (TLS is Apple's `Network`/`Security` — the `ssl_sock_ossl.o`
-object is present but compiles to nothing), GSM, Speex, SDL, ffmpeg, openh264, VPX.
+object is present but compiles to nothing), GSM, Speex, SDL, ffmpeg, openh264.
 
 This is the same failure mode that bites TDLibFramework consumers, which statically vendors
 OpenSSL and zlib and breaks the moment the app links its own. The list above exists so nobody has
@@ -354,6 +357,11 @@ Opus patent licence (the text rides along in opus's `COPYING`): a royalty-free g
 contributing companies (Xiph.Org, Skype/Microsoft, Broadcom et al.) covering Opus implementations
 within the standard. Opus's headers are deliberately *not* shipped — `pjmedia-codec/opus.h` pulls
 only `<pjmedia-codec/types.h>` and consumers never call raw libopus.
+
+**BSD-3-Clause note, twin.** libvpx (added in `0.5.0`) is the same licence shape as libopus:
+BSD-3-Clause code licence, plus the libvpx `PATENTS` file's royalty-free grant covering the VP8/VP9
+implementation. Its headers are likewise *not* shipped — `pjmedia-codec/vpx.h` includes only
+`<pjmedia/vid_codec.h>`, so no `<vpx/...>` header ever reaches a consumer's include path.
 
 ### New in 2.17/master: an AI media port, and a WebSocket client under it
 

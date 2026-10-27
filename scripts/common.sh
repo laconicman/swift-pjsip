@@ -26,6 +26,7 @@ OUTPUT_DIR="${BUILD_ROOT}/output"
 PJSIP_GH_REPO="pjsip/pjproject"
 BCG729_GH_REPO="BelledonneCommunications/bcg729"
 OPUS_GH_REPO="xiph/opus"
+VPX_GH_REPO="webmproject/libvpx"
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -489,6 +490,79 @@ fetch_opus_source() {
     } > "${META_DIR}/opus-source.env"
 }
 
+# Fetch libvpx per spec into ${BUILD_ROOT}/vpx-source, record provenance.
+# `latest` resolves via the highest version-sorted TAG, never the latest GitHub
+# Release object (same reason as opus), and skips -rcN candidates: git's version
+# sort ranks vX.Y.Z-rcN ABOVE vX.Y.Z, so gh_latest_tag alone would pin a
+# release candidate (v1.17.0-rc2 > v1.17.0).
+fetch_vpx_source() {
+    local spec="$1"
+    local kind ref commit="" url="https://github.com/${VPX_GH_REPO}.git"
+    local dest="${BUILD_ROOT}/vpx-source"
+
+    mkdir -p "${BUILD_ROOT}"
+    rm -rf "$dest"
+
+    case "$spec" in
+        latest)
+            ref="$(git ls-remote --tags --sort=-v:refname "${url}" 2>/dev/null \
+                | awk -F/ '$NF !~ /-rc[0-9]+$/ && $NF !~ /\^\{\}$/ {print $NF; exit}' || true)"
+            if [[ -n "$ref" ]]; then
+                kind="tag"
+                log_info "Latest libvpx tag: ${ref}"
+                git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$ref" "$url" "$dest" \
+                    || error_exit "Failed to clone libvpx at ${ref}"
+            else
+                log_warn "No libvpx tag resolvable; falling back to default branch HEAD."
+                kind="branch"; ref="HEAD"
+                git clone --quiet --depth 1 "$url" "$dest" || error_exit "Failed to clone libvpx"
+            fi
+            ;;
+        tag=*|branch=*)
+            ref="${spec#*=}"
+            kind="${spec%%=*}"
+            git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$ref" "$url" "$dest" \
+                || error_exit "Failed to clone libvpx at ${kind} '${ref}'"
+            ;;
+        commit=*)
+            # `clone --branch` takes no SHA; fetch the one commit into an empty
+            # repo instead (GitHub serves reachable SHAs to a depth-1 fetch).
+            ref="${spec#commit=}"; kind="commit"
+            if ! { git init --quiet "$dest" \
+                    && git -C "$dest" fetch --quiet --depth 1 "$url" "$ref" \
+                    && git -C "$dest" -c advice.detachedHead=false checkout --quiet FETCH_HEAD; }; then
+                error_exit "Failed to fetch libvpx commit '${ref}'"
+            fi
+            ;;
+        archive=*)
+            local archive="${spec#archive=}"
+            [[ -f "$archive" ]] || error_exit "libvpx archive not found: ${archive}"
+            kind="archive"; ref="$(basename "$archive")"
+            local top
+            top="$(extract_archive_to "$archive" "${BUILD_ROOT}/.extract-vpx")"
+            mv "$top" "$dest"
+            rm -rf "${BUILD_ROOT}/.extract-vpx"
+            ;;
+    esac
+
+    if [[ -d "${dest}/.git" ]]; then
+        commit="$(git -C "$dest" rev-parse HEAD 2>/dev/null || true)"
+    fi
+    [[ -f "${dest}/configure" && -f "${dest}/vpx/vpx_encoder.h" ]] \
+        || error_exit "Extracted tree does not look like libvpx (configure or vpx/vpx_encoder.h missing)."
+    log_success "libvpx source ready: ${dest}"
+
+    mkdir -p "${META_DIR}"
+    {
+        echo "VPX_SOURCE_SPEC=\"${spec}\""
+        echo "VPX_SOURCE_KIND=\"${kind}\""
+        echo "VPX_REF=\"${ref}\""
+        echo "VPX_COMMIT=\"${commit}\""
+        echo "VPX_URL=\"${url}\""
+        echo "VPX_FETCH_DATE=\"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\""
+    } > "${META_DIR}/vpx-source.env"
+}
+
 # ---------------------------------------------------------------------------
 # Metadata helpers
 # ---------------------------------------------------------------------------
@@ -528,7 +602,8 @@ record_build_env() {
 load_meta() {
     local f
     for f in "${META_DIR}/pjsip-source.env" "${META_DIR}/bcg729-source.env" \
-             "${META_DIR}/opus-source.env" "${META_DIR}/build-device.env"; do
+             "${META_DIR}/opus-source.env" "${META_DIR}/vpx-source.env" \
+             "${META_DIR}/build-device.env"; do
         # Variable, build-time-generated path: there's nothing for shellcheck to
         # follow (SC1090, the dynamic-source variant of SC1091).
         # shellcheck disable=SC1090
@@ -554,6 +629,7 @@ clean_target() {
     log_info "Cleaning ${target} build artifacts..."
     rm -rf "${BUILD_ROOT:?}/${target}" "${BUILD_ROOT:?}/bcg729-${target}" \
            "${BUILD_ROOT:?}/bcg729-source/build-${target}" \
-           "${BUILD_ROOT:?}/opus-${target}" "${BUILD_ROOT:?}/opus-source/build-${target}"
+           "${BUILD_ROOT:?}/opus-${target}" "${BUILD_ROOT:?}/opus-source/build-${target}" \
+           "${BUILD_ROOT:?}/vpx-${target}" "${BUILD_ROOT:?}/vpx-source/build-${target}"
     log_success "Cleaned ${target}"
 }
