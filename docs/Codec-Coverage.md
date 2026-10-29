@@ -70,8 +70,9 @@ Verified against the binary itself — `scripts/verify-xcframework.sh` asserts p
 `opus_repacketizer_get_size` (the libopus object configure probes for),
 `pjmedia_codec_vpx_vid_init` (the VPX wrapper, `PJMEDIA_HAS_VPX_CODEC`), `vpx_codec_vp8_cx` and
 `vpx_codec_vp9_cx` (both libvpx interfaces the wrapper binds — either missing would be an
-unresolved symbol at the app's link) are defined symbols, and that the GSM/Speex/G.722.1/L16 init
-symbols are absent.
+unresolved symbol at the app's link) are defined symbols, that
+`pjmedia_libyuv_converter_init` + `I420Scale` mark libyuv folded in (the conversion path that
+feeds the codecs' I420 input), and that the GSM/Speex/G.722.1/L16 init symbols are absent.
 
 ## What Opus costs the consumer: clock rate
 

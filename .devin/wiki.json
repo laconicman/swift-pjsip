@@ -51,7 +51,7 @@
     },
     {
       "title": "Verifying the Artifact",
-      "purpose": "Document how a build is proven to match the parameters it was supposed to be built with, by inspecting the binary rather than trusting build logs. Cover what scripts/verify-xcframework.sh checks per slice — architecture and platform tag, minimum iOS version, the native Darwin TLS backend with OpenSSL symbols absent, TLS transport, the video subsystem and the VideoToolbox codec, bcg729, Opus, libvpx, SRTP, and GSM, Speex, G.722.1 and L16 absent, and a sane module map and header layout — plus its typecheck mode, which compiles import PJSIP and import PJSUA2 against the artifact the way SwiftPM would, and how .github/workflows/ci.yml runs manifest validation, verification and shellcheck on every push and pull request.",
+      "purpose": "Document how a build is proven to match the parameters it was supposed to be built with, by inspecting the binary rather than trusting build logs. Cover what scripts/verify-xcframework.sh checks per slice — architecture and platform tag, minimum iOS version, the native Darwin TLS backend with OpenSSL symbols absent, TLS transport, the video subsystem and the VideoToolbox codec, bcg729, Opus, libvpx, libyuv, SRTP, and GSM, Speex, G.722.1 and L16 absent, and a sane module map and header layout — plus its typecheck mode, which compiles import PJSIP and import PJSUA2 against the artifact the way SwiftPM would, and how .github/workflows/ci.yml runs manifest validation, verification and shellcheck on every push and pull request.",
       "parent": null
     },
     {

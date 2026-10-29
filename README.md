@@ -246,7 +246,7 @@ by inspecting the binary, not the logs:
 This proves: arm64 slices with correct device/simulator platform tags and minimum
 iOS; native Darwin SSL (Security/Network symbols present, OpenSSL absent); TLS
 transport; video + VideoToolbox; bcg729 G.729; Opus (pjmedia wrapper + libopus);
-VP8/VP9 (pjmedia wrapper + libvpx);
+VP8/VP9 (pjmedia wrapper + libvpx); libyuv (pjmedia converter + implementation);
 SRTP; GSM/Speex/G.722.1/L16 absent; sane module
 map and headers. `--typecheck` additionally compiles `import PJSIP` / `import PJSUA2`
 against the artifact the way SwiftPM would.
