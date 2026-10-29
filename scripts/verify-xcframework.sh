@@ -10,7 +10,8 @@
 #   - TLS backend: the Apple/Network.framework one (PJ_SSL_SOCK_IMP_APPLE) —
 #     nw_*/sec_protocol_* referenced, Secure Transport and OpenSSL absent
 #   - TLS transport, video subsystem, VideoToolbox codec, bcg729 (G.729),
-#     Opus (libopus), libvpx (VP8+VP9), SRTP — all present as defined symbols
+#     Opus (libopus), libvpx (VP8+VP9), libyuv (I420 conversion), SRTP — all
+#     present as defined symbols
 #   - disabled codecs (GSM, Speex) and the never-enabled ones (G.722.1, L16)
 #     absent
 # Plus header checks: module map shape, config_site.h constants, and
@@ -238,6 +239,13 @@ verify_slice() {
     check_defined "$slice" "pjmedia_codec_vpx_vid_init"   "PJSIP VPX codec wrapper built (PJMEDIA_HAS_VPX_CODEC)"
     check_defined "$slice" "vpx_codec_vp8_cx"             "libvpx VP8 implementation folded into archive"
     check_defined "$slice" "vpx_codec_vp9_cx"             "libvpx VP9 implementation folded into archive (VP9 on)"
+
+    # libyuv (bundled third_party; enabled via -DPJMEDIA_HAS_LIBYUV=1 from
+    # os-auto.mak, NOT a config_site macro). It backs pjmedia's video format
+    # converter — the path capture frames take to reach a codec's I420 input —
+    # so VP8/VP9 shipped without it could negotiate and still never encode.
+    check_defined "$slice" "pjmedia_libyuv_converter_init" "libyuv converter built (PJMEDIA_HAS_LIBYUV)"
+    check_defined "$slice" "I420Scale"                     "libyuv implementation folded into archive"
 
     # SRTP (bundled third-party, on by default)
     check_defined "$slice" "pjmedia_transport_srtp_create" "SRTP transport built"

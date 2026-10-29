@@ -1070,8 +1070,8 @@ phase_notes() {
         echo "The checks confirm, against the binary itself: arm64 slices, device/simulator"
         echo "platform tags, minimum iOS version, native Darwin SSL (Network/Security symbol"
         echo "references, no OpenSSL), TLS transport, video + VideoToolbox codec, bcg729"
-        echo "G.729, Opus, libvpx VP8+VP9, SRTP, and that disabled codecs (GSM/Speex,"
-        echo "G.722.1, L16) are absent."
+        echo "G.729, Opus, libvpx VP8+VP9, libyuv, SRTP, and that disabled codecs"
+        echo "(GSM/Speex, G.722.1, L16) are absent."
     } > "${notes}"
 
     log_success "Release notes written -> ${notes}"
