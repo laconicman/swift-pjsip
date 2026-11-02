@@ -50,9 +50,9 @@ while [[ $# -gt 0 ]]; do
         --expect-min-ios=*) EXPECT_MIN_IOS="${1#*=}"; shift ;;
         --quiet)            QUIET=1; shift ;;
         --typecheck)        TYPECHECK=1; shift ;;
-        # 27 = the header block above, which ends at `set -euo pipefail`. Keep this in
+        # 32 = the header block above, which ends at `set -euo pipefail`. Keep this in
         # step with it, or --help starts printing the helper functions' comments.
-        -h|--help)          grep '^#' "$0" | sed 's/^# \{0,1\}//' | head -27; exit 0 ;;
+        -h|--help)          grep '^#' "$0" | sed 's/^# \{0,1\}//' | head -32; exit 0 ;;
         *)                  XCF="$1"; shift ;;
     esac
 done
