@@ -47,6 +47,18 @@ CONFIGURE_FLAGS=(
 )
 BASE_LDFLAGS="-framework Network -framework Security -framework MetalKit"
 
+# Compile flags handed to pjproject's configure-iphone via the environment.
+# configure-iphone defaults CFLAGS to "-O2 -Wno-unused-label" ONLY when it is
+# unset, so exporting CFLAGS at all suppresses that default and the whole
+# line must be restated: -O2 is the optimisation level every released
+# artifact was built with and must not drift, and -g adds the DWARF sections
+# libpjproject.a never had (consumer crash reports carried no file:line for
+# pjproject frames). CXXFLAGS is deliberately left unset — configure never
+# supplied it, so autoconf's -g -O2 default has applied to pjsua2 all along.
+# Only pjproject and its bundled third_party see this value; bcg729, opus
+# and libvpx keep their own build flags.
+PJSIP_CFLAGS="${PJSIP_CFLAGS:--O2 -Wno-unused-label -g}"
+
 # ---------------------------------------------------------------------------
 # Target parameters
 # ---------------------------------------------------------------------------
@@ -463,6 +475,12 @@ build_pjsip() {
     (
         cd "${BUILD_ROOT}/pjproject" || error_exit "cannot enter ${BUILD_ROOT}/pjproject"
         find . -name "*.depend" -exec rm {} \; 2>/dev/null || true
+
+        # Exported inside this subshell on purpose: pjproject's configure+make
+        # are the only consumers, and a function-level export would leak into
+        # a deps phase invoked later in the same process (bcg729, opus and
+        # libvpx keep their own build flags).
+        export CFLAGS="${PJSIP_CFLAGS}"
 
         log_info "Configuring PJSIP (log: ${configure_log})..."
         # EXTRA_CONFIGURE_FLAGS is deliberately unquoted so several flags in it
@@ -999,6 +1017,7 @@ phase_notes() {
         echo "- configure flags: \`${BUILT_CONFIGURE_FLAGS:-${CONFIGURE_FLAGS[*]}} --with-bcg729=<bcg729 install> --with-opus=<opus install> --with-vpx=<libvpx install>\`"
         echo "- Extra configure flags: \`${EXTRA_CONFIGURE_FLAGS:-none}\`"
         echo "- LDFLAGS: \`${BASE_LDFLAGS}${EXTRA_LDFLAGS:+ ${EXTRA_LDFLAGS}}\`"
+        echo "- CFLAGS (pjproject only): \`${PJSIP_CFLAGS}\`"
         echo
         echo "### Local patches applied to the PJSIP source"
         echo
@@ -1070,8 +1089,9 @@ phase_notes() {
         echo "The checks confirm, against the binary itself: arm64 slices, device/simulator"
         echo "platform tags, minimum iOS version, native Darwin SSL (Network/Security symbol"
         echo "references, no OpenSSL), TLS transport, video + VideoToolbox codec, bcg729"
-        echo "G.729, Opus, libvpx VP8+VP9, libyuv, SRTP, and that disabled codecs"
-        echo "(GSM/Speex, G.722.1, L16) are absent."
+        echo "G.729, Opus, libvpx VP8+VP9, libyuv, SRTP, the serial conference bridge,"
+        echo "PJ_DEBUG 0 assert logging and DWARF debug info in the objects (all three"
+        echo "since 0.7.0), and that disabled codecs (GSM/Speex, G.722.1, L16) are absent."
     } > "${notes}"
 
     log_success "Release notes written -> ${notes}"

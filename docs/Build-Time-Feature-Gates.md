@@ -25,6 +25,8 @@ on (`PJMEDIA_HAS_VIDEO`, iOS video device, VideoToolbox codec), UDP/TCP/TLS tran
 Opus (`PJMEDIA_HAS_OPUS_CODEC`, since `0.4.0`), VPX (`PJMEDIA_HAS_VPX_CODEC` + the VP8/VP9
 sub-gates, since `0.5.0`),
 `PJMEDIA_RTP_PT_TELEPHONE_EVENTS 101`, CoreAudio advanced ducking, and `PJSIP_MAX_PKT_LEN 16000`.
+Since `0.7.0` it also pins `PJMEDIA_CONF_BACKEND` to the serial bridge and sets `PJ_DEBUG 0`
+(assert policy moved to the consumer's log callback — both below).
 `PJSIP_DONT_SWITCH_TO_TCP` is **not** set — it used to be, and it disabled RFC 3261 §18.1.1 outright,
 so no authenticated call could be placed over UDP.
 
@@ -46,29 +48,51 @@ So the capacity block sets exactly two numbers and hands the rest back:
 The bare `#undef` matters because `pjsua.h` guards each of these with `#ifndef` — undoing the preset
 and stopping there inherits upstream's number, today's and tomorrow's.
 
-### Left at upstream's default, and changed by upstream: the conference bridge
+### The conference bridge: pinned back to the serial backend since `0.7.0`
 
-From `0.3.0` the artifact mixes audio in `conf_thread.c`, not `conference.c`.
+From `0.3.0` the artifact mixed audio in `conf_thread.c`, not `conference.c`.
 [pjproject#5297](https://github.com/pjsip/pjproject/pull/5297) made the parallel bridge the default
 backend wherever there are threads. On iOS, `PJMEDIA_CONF_THREADS` defaults to 1, so pjsua asks
 for no worker threads and the bridge runs non-parallel: mixing stays in the sound device's
 `get_frame()` thread, and the new `pjsua_media_config.conf_thread_prio` (applied to worker threads
 only) has nothing to act on.
 
-What an application can observe is timing, in two places:
+What an application can observe is timing, in two places — both of which **flip back** under the
+pin, since they were the parallel bridge's changes:
 
-- Queued connect, disconnect and remove operations are applied after the tick's mix rather than
-  before it, so a mute (a disconnect from slot 0) takes effect one 20 ms frame later.
-- A hangup's BYE now goes out before the call's port has left the bridge; on 0.2.1 it went out
-  after. In the Offhook live suite, four calls tore down in 11 ms where they had taken ~330 ms.
-  A call slot stays taken until its BYE transaction ends, though, so a call placed in the same
-  instant can meet `PJ_ETOOMANY`. That is how the suite found this: a test dialling right after
-  another had filled the call table started failing.
+- The parallel bridge applied queued connect, disconnect and remove operations after the tick's
+  mix rather than before it; the serial bridge applies them before it again (the 0.2.1 order), so
+  a mute (a disconnect from slot 0) takes effect one 20 ms frame earlier than on `0.3.0`–`0.6.0`.
+- On the parallel bridge a hangup's BYE went out before the call's port had left the bridge; under
+  the serial bridge it goes out after, as on 0.2.1.
 
-Pinning
-`PJMEDIA_CONF_SERIAL_BRIDGE_BACKEND` would keep the old file, at the cost of running a backend
-upstream no longer defaults to; we do not.
-The line-level reasoning is in `scripts/config_site-ios.h`.
+The pin exists because the parallel bridge holds an invariant the serial one never needed —
+`mix_and_transmit()` asserts a listener fed by a single transmitter sees a new timestamp every
+tick (`conf_thread.c` `pj_assert(listener->transmitter_cnt == 1 && listener->last_timestamp.u64
+!= timestamp->u64)`). That is reachable from legal pjsua use: every sound-device (re)open —
+`pjsua_set_null_snd_dev()` always, `pjsua_set_snd_dev()` whenever it actually (re)opens a
+device — creates a new `pjmedia_clock` whose timestamp restarts at 0 while
+`conf_port->last_timestamp` persists, so a port not mixed for the few ticks around a reopen
+meets its own old timestamp. With asserts on it aborted a consumer build seconds into a call;
+`conference.c` clears the mix buffer of every listener that has a transmitter at the top of
+each tick and has no such invariant. `PJMEDIA_CONF_BACKEND` is therefore
+`PJMEDIA_CONF_SERIAL_BRIDGE_BACKEND` in `scripts/config_site-ios.h`, whose comment carries
+the line-level reasoning.
+
+### `PJ_DEBUG` — assert policy moved to the consumer's log callback (since `0.7.0`)
+
+Not a feature gate, but a behaviour every consumer must know is baked in. Upstream defaults
+`PJ_DEBUG` to `!NDEBUG`, and this build defines no `NDEBUG`, so through `0.6.0` every `pj_assert`
+was `assert()` — **abort()**. `0.7.0` defines `PJ_DEBUG 0`: a failed assert emits a level-1
+`PJ_LOG(1, (__FILE__, "Assert failed: %s", #expr))` synchronously from the asserting frame, on
+PJLIB-registered threads, and execution continues — `PJ_ASSERT_RETURN` returns its error code,
+`PJ_ASSERT_ON_FAIL` runs its recovery path. The abort-or-continue policy moves to the
+application's log callback, which can still `abort()` on a line starting `Assert failed:` where
+crash telemetry is wanted, with the asserting function still on the stack.
+
+Cost: `pj_mutex_t` loses its owner/nesting bookkeeping, asserts are silent on threads that never
+registered with PJLIB, and an internal invariant violation now *continues* — a consumer that does
+not watch level-1 `Assert failed:` lines sees nothing at all.
 
 ### Compiled in since `0.3.0`, off unless the application turns them on
 

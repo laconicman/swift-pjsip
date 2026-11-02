@@ -595,6 +595,7 @@ record_build_env() {
         # print the flag list twice, half of it duplicated.
         echo "BUILT_CONFIGURE_FLAGS=\"${CONFIGURE_FLAGS[*]}\""
         echo "BASE_LDFLAGS=\"${BASE_LDFLAGS}\""
+        echo "PJSIP_CFLAGS=\"${PJSIP_CFLAGS}\""
     } > "${META_DIR}/build-${label}.env"
 }
 

@@ -247,7 +247,9 @@ This proves: arm64 slices with correct device/simulator platform tags and minimu
 iOS; native Darwin SSL (Security/Network symbols present, OpenSSL absent); TLS
 transport; video + VideoToolbox; bcg729 G.729; Opus (pjmedia wrapper + libopus);
 VP8/VP9 (pjmedia wrapper + libvpx); libyuv (pjmedia converter + implementation);
-SRTP; GSM/Speex/G.722.1/L16 absent; sane module
+SRTP; GSM/Speex/G.722.1/L16 absent; the serial conference bridge
+(`PJMEDIA_CONF_SERIAL_BRIDGE_BACKEND`, since 0.7.0); `PJ_DEBUG 0` assert logging;
+DWARF debug info in the objects; sane module
 map and headers. `--typecheck` additionally compiles `import PJSIP` / `import PJSUA2`
 against the artifact the way SwiftPM would.
 

@@ -317,6 +317,50 @@ chosen by `ls | sort | tail -1`, which is **lexicographic** (`iPhoneOS9.3` sorts
 `iPhoneOS10.0`); `RANLIB` is stubbed to `echo ranlib`; and each run configures exactly one
 `-arch`, so multi-arch means multiple configure+make passes.
 
+### 12. Assert policy is the consumer's — `PJ_DEBUG 0`, and the serial conference bridge
+
+Two 0.7.0 changes share one incident: a consumer's TestFlight build aborted in
+`conf_thread.c` `mix_and_transmit()` on
+`pj_assert(listener->transmitter_cnt == 1 && listener->last_timestamp.u64 != timestamp->u64)`
+seconds into a call, on a legal pjsua sequence. The parallel bridge — upstream's
+default since [pjproject#5297](https://github.com/pjsip/pjproject/pull/5297),
+shipped since `0.3.0` — requires a listener fed by one transmitter to see a new
+timestamp every tick. But every sound-device (re)open —
+`pjsua_set_null_snd_dev()` always, `pjsua_set_snd_dev()` whenever it actually
+(re)opens a device — creates a new `pjmedia_clock` starting at timestamp 0,
+while `conf_port->last_timestamp` persists across the
+reopen, so a port not mixed for the few ticks around it meets its own old
+timestamp and trips the assert. The serial bridge in `conference.c` holds no
+such invariant — it clears the mix buffer of every listener that has a
+transmitter at the top of each tick.
+
+- **The bridge is pinned back to `conference.c`.** `config_site-ios.h` defines
+  `PJMEDIA_CONF_BACKEND` as `PJMEDIA_CONF_SERIAL_BRIDGE_BACKEND`. Cost: a
+  backend upstream no longer defaults to, and op-queue timing reverts to the
+  pre-#5297 order — connect/disconnect/remove applied *before* the tick's mix
+  instead of after, so the teardown-ordering note `0.3.0` carried flips back.
+  The verifier asserts the backend from the binary: `_pjmedia_conf_create` must
+  come from `conference.o` (both files compile; each self-gates on the macro).
+- **Asserts log instead of aborting.** `PJ_DEBUG 0` turns `pj_assert` into a
+  level-1 `PJ_LOG(1, (__FILE__, "Assert failed: %s", #expr))` emitted
+  synchronously from the asserting frame, on PJLIB-registered threads. The
+  abort-or-continue policy thereby moves to the application's log callback,
+  which can still `abort()` on `Assert failed:` where crash telemetry is
+  wanted — with the asserting function on the stack. Cost: `pj_mutex_t` loses
+  its owner/nesting bookkeeping, asserts are silent on unregistered threads,
+  and an invariant violation now *continues* — a consumer that does not watch
+  level-1 `Assert failed:` lines flies blind. Verified by the format string
+  being compiled into the archive (absent under `PJ_DEBUG 1`).
+
+Related but separable: the archive now carries **DWARF** — `build.sh` exports
+`CFLAGS="-O2 -Wno-unused-label -g"` for pjproject and its bundled third_party —
+because the same incident was undiagnosable from crash reports that had no
+file:line on pjproject frames. `configure-iphone` supplies `-O2 -Wno-unused-label`
+only when `CFLAGS` is unset, so the whole default is restated plus `-g`; CXXFLAGS
+stays unset because autoconf's `-g -O2` default has applied to pjsua2 all along
+(the C++ objects already carried debug info). The verifier extracts
+`conference.o`/`sound_port.o` per slice and requires `__debug_info`.
+
 ## What is statically inside `libpjproject.a` — and what a host must not link
 
 The artifact is **one static library per slice**, and `combine_merge_libs()` folds *everything*

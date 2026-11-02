@@ -17,7 +17,7 @@
  * here for a year silently breaking every authenticated call over UDP.
  * A comment that names the tradeoff would have caught it.
  *
- * Line references are pjproject master @ 1f0ebf2eb (2026-10-27). Each one
+ * Line references are pjproject master @ bf14c2e2c (2026-10-29). Each one
  * carries the `token` that must sit at that line; scripts/check-cites.sh
  * verifies them against the tree build.sh is about to compile, so the line
  * above is checked on every download rather than claimed by the last edit.
@@ -110,13 +110,13 @@
  * bridge is larger than the compile-time value.
  *
  * COST: 8 bytes per unused slot in conf->ports
- * (conf_thread.c:1114-1119 `conf->ports =`), plus max_ports*8 bytes per LIVE
+ * (conference.c:848-850 `conf->ports =`), plus max_ports*8 bytes per LIVE
  * port for its listener_slots/listener_adj_level arrays
- * (conf_thread.c:711-719 `conf_port->listener_adj_level =`) — ~2 KB per live
- * port at 254. The mixing hot loop walks the active ports only, not max_ports
- * (conf_thread.c:4085-4094 `conf->active_ports_idx`), so idle slots cost no
- * CPU. (conf_thread.c, not conference.c: see the PJMEDIA_CONF_BACKEND note
- * below.)
+ * (conference.c:501-509 `conf_port->listener_adj_level =`) — ~2 KB per live
+ * port at 254. The mixing loop walks the port array but exits once every
+ * live port has been seen (conference.c:3312 `ci < conf->port_cnt`), so an
+ * idle slot costs a NULL check per tick, not a mix. (conference.c, not
+ * conf_thread.c: see the PJMEDIA_CONF_BACKEND note below.)
  */
 #undef  PJSUA_MAX_CONF_PORTS
 
@@ -280,26 +280,73 @@
  * swift-pjsua/docs/Call-Termination-Paths.md §4.1 — changing it at build time
  * silently moves a number other documents quote. */
 
-/* PJMEDIA_CONF_BACKEND and PJMEDIA_CONF_THREADS are deliberately left at their
- * defaults. Since pjproject#5297 the default backend is the parallel bridge
- * (conf_thread.c) wherever there are threads, so this slice no longer builds
- * conference.c. PJMEDIA_CONF_THREADS defaults to 1 under TARGET_OS_IPHONE
- * (pjmedia/config.h:178-188 `ifndef PJMEDIA_CONF_THREADS`), so pjsua passes
- * worker_threads 0 (pjsua_aud.c:355 `param.worker_threads`) and the bridge
- * runs with is_parallel false (conf_thread.c:1108 `conf->is_parallel`): no
- * worker threads are created, mixing stays in the sound device's get_frame()
- * thread, and conf_thread_prio, which only applies to workers, does nothing.
- * What an application can observe is timing. The parallel bridge applies
- * queued connect/disconnect/remove operations after the tick's mix
- * (conf_thread.c:3929-3936 `handle_op_queue(conf)`), where conference.c
- * applied them before it (conference.c:3266-3273 `handle_op_queue(conf)`), so
- * they take effect one frame (20 ms) later. And a
- * hangup's BYE now leaves before the call's port has left the bridge; on
- * 0.2.1 it left after. In a live suite four calls tore down in 11 ms instead of
- * ~330 ms, while each call slot stays taken until its BYE transaction ends, so
- * a call placed right after a mass hangup can meet PJ_ETOOMANY.
- * Pinning PJMEDIA_CONF_SERIAL_BRIDGE_BACKEND would keep the old file at the
- * cost of running a backend upstream no longer defaults to. */
+/* The conference bridge pinned to the SERIAL backend (conference.c), not
+ * upstream's new default — the parallel bridge (conf_thread.c) that
+ * pjproject#5297 made the default wherever PJ_HAS_THREADS
+ * (pjmedia/config.h:156-164 `ifndef PJMEDIA_CONF_BACKEND`), and which this
+ * artifact ran since 0.3.0.
+ *
+ * WHY: the parallel bridge holds an invariant the serial one never needed —
+ * mix_and_transmit() asserts that a listener fed by a single transmitter sees
+ * a NEW timestamp every tick
+ * (conf_thread.c:4507 `pj_assert(listener->transmitter_cnt == 1`), and that
+ * invariant is reachable from legal pjsua use. Every sound-device (re)open —
+ * pjsua_set_null_snd_dev() always, pjsua_set_snd_dev() whenever it actually
+ * (re)opens a device (an already-open device returns early:
+ * pjsua_aud.c:2550-2560 `No changes in capture and playback devices`) —
+ * creates a new pjmedia_clock whose timestamp restarts at 0
+ * (clock_thread.c:246 `clock->timestamp.u64 = 0`), while
+ * conf_port->last_timestamp persists across the reopen, so a listener that
+ * was not mixed for the few ticks around it meets its own old timestamp
+ * again and the assert fires. With pj_assert == abort() (see PJ_DEBUG below)
+ * that killed a consumer build seconds into a call, on 2026-11-02.
+ * conference.c has no such invariant: it clears the mix buffer of every
+ * listener that has a transmitter at the top of each tick
+ * (conference.c:3304 `pj_bzero(conf_port->mix_buf`), so a repeated timestamp
+ * is unremarkable.
+ *
+ * COST: a backend upstream no longer defaults to, so less exercised there.
+ * Op-queue timing reverts to the pre-0.3.0 behaviour:
+ * connect/disconnect/remove are applied BEFORE the tick's mix
+ * (conference.c:3269-3273 `handle_op_queue(conf)` in get_frame) instead of
+ * after it (conf_thread.c:3932-3936 `handle_op_queue(conf)`), so they take
+ * effect one 20 ms frame earlier and a hangup's BYE leaves after the call's
+ * port has left the bridge again — the teardown-ordering change described
+ * here in 0.3.0 flips back.
+ *
+ * PJMEDIA_CONF_THREADS stays at its default: it sizes only the parallel
+ * backend's worker pool
+ * (pjmedia/config.h:178-187 `ifndef PJMEDIA_CONF_THREADS`)
+ * and conference.c never reads it.
+ */
+#define PJMEDIA_CONF_BACKEND PJMEDIA_CONF_SERIAL_BRIDGE_BACKEND
+
+/* Assert policy moved from abort() to the log. Upstream defaults PJ_DEBUG to
+ * !NDEBUG (pj/config.h:379-385 `ifndef PJ_DEBUG`) and this build defines no
+ * NDEBUG, so pj_assert has been assert() — abort() — in every artifact
+ * shipped through 0.6.0. With PJ_DEBUG 0, pj_assert(expr) instead emits a
+ * level-1 PJ_LOG(1, (__FILE__, "Assert failed: %s", #expr)) synchronously
+ * from the asserting frame, but only on PJLIB-registered threads
+ * (pj/assert.h:48-60 `Assert failed:`); PJ_ASSERT_RETURN then returns its
+ * error code to the caller (pj/assert.h:96-100 `define PJ_ASSERT_RETURN`)
+ * and PJ_ASSERT_ON_FAIL still runs its recovery path
+ * (pj/assert.h:110-114 `define PJ_ASSERT_ON_FAIL`). The abort-or-continue
+ * decision thereby moves to the application's log callback, which can still
+ * abort() on a line starting "Assert failed:" where crash telemetry is
+ * wanted — with the asserting function still on the stack.
+ *
+ * WHY: the conf_thread.c assert above aborted a consumer build on a legal
+ * pjsua sequence, and an assertion that kills the process cannot be
+ * survived, reported, or triaged by the application.
+ *
+ * COST: pj_mutex_t loses its owner/nesting bookkeeping
+ * (os_core_unix.c:144-148 `#if PJ_DEBUG`), so mutex-misuse diagnostics go
+ * quiet; pj_assert is silent on threads that never registered with PJLIB;
+ * and internal invariant violations now CONTINUE past the assert — a
+ * consumer MUST watch for level-1 log lines starting "Assert failed:", or
+ * the same violations become invisible.
+ */
+#define PJ_DEBUG 0
 
 /* ---------------------------------------------------------------------------
  * Deliberately NOT enabled — reasoning in docs/Build-Time-Feature-Gates.md
