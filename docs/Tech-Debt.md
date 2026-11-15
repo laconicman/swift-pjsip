@@ -10,7 +10,7 @@ Status legend: **open** (owed), **blocked-upstream** (owed, waiting on pjsip/pjp
 
 ---
 
-## TD-1 — `PJMEDIA_CONF_BACKEND` pinned to the serial bridge · **blocked-upstream**
+## TD-1 — `PJMEDIA_CONF_BACKEND` pinned to the serial bridge · **open — upstream fix landed, awaiting vendor bump**
 
 Since `0.7.0`, `scripts/config_site-ios.h` defines `PJMEDIA_CONF_BACKEND` as
 `PJMEDIA_CONF_SERIAL_BRIDGE_BACKEND`, off the `conf_thread.c` parallel default the artifact ran
@@ -32,16 +32,27 @@ still matches its documented behaviour. The pin also flips op-queue and BYE orde
 pre-`0.3.0` semantics — currently treated as a plus (the `0.2.1`-era order), but it is a
 divergence a future upgrade has to re-decide, not an invisible one.
 
+**Update 2026-11-15 — upstream fixed it before our report was filed.**
+[pjproject#5377](https://github.com/pjsip/pjproject/pull/5377) (`ddf55c302`, nanangizz,
+2026-11-05) replaced `last_timestamp` with a bridge-owned tick counter (`last_tick`,
+incremented in `get_frame()`) at all three sites our analysis flagged — the single-transmitter
+assert, the multi-transmitter sum-path check, and `write_port()`'s heartbeat check — and added
+`clock_restart_test` to `conf_test` covering exactly this scenario (one and two transmitters,
+timestamp restart). The maintainer kept the assert: on a bridge-owned tick it is again a
+genuine invariant, so the draft's "downgrade to a logged check" candidate is dropped.
+Nothing further is owed upstream for this defect.
+
 **Resolution path.**
 
-1. File the drafted upstream report (held until device testing of `0.7.0` confirms the
-   workaround under real calls).
-2. Send a fix upstream — bridge-owned tick counter or `last_timestamp` reset on a
-   backwards-moving master-port timestamp are the candidates in the report.
-3. When a fixed pjproject is vendored: re-evaluate the pin. Unpinning is not automatic — the
-   serial bridge's op-queue ordering is what `0.2.1`-era consumers were built against, so
-   "stay serial deliberately" is a legitimate end state. The decision must be made with the
-   upstream fix in hand, not assumed now.
+1. ~~File the drafted upstream report~~ — superseded by #5377; the draft stays as internal
+   evidence (not filed, not needed).
+2. When a pjproject ≥ `ddf55c302` is vendored (current upstream master `d78f0ddc7` also carries
+   publish-client thread-safety #5383, failed re-INVITE rollback #5355, and the
+   unregistered-account fix #5362 — all independently wanted): re-evaluate the pin. Unpinning
+   is not automatic — the serial bridge's op-queue ordering is what `0.2.1`-era consumers were
+   built against, so "stay serial deliberately" is a legitimate end state. The decision must be
+   made with the fix vendored and device-tested, not assumed now. Until then the pin stays —
+   `0.7.0` is mid device-validation and must not churn.
 
 ## TD-2 — `PJ_DEBUG 0` baked into the release artifact · **open**
 
@@ -62,9 +73,10 @@ placeholder — aborting on the sound/clock thread was the crash being fixed. Wh
 - whether a **debug-flavored** artifact (`PJ_DEBUG 1`, or a second xcframework variant) is worth
   producing so development and fuzzing builds keep the abort behaviour the library was designed
   around;
-- re-checking the decision if upstream downgrades the reachable production asserts to logged
-  checks (part of the #26 fix candidates) — at that point `PJ_DEBUG 1` may stop being fatal in
-  practice and the flavor question answers itself.
+- ~~re-checking if upstream downgrades the reachable production asserts~~ — settled: #5377
+  fixed the reachable assert rather than downgrading it, and the assert now guards a genuine
+  (bridge-owned) invariant, so `PJ_DEBUG 1` remains fatal on real violations. The flavor
+  question stands on its own merits.
 
 ---
 
