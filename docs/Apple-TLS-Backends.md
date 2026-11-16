@@ -307,3 +307,163 @@ So when working anywhere in `ssl_sock_darwin.c` or `ssl_sock_apple.m`, until pjp
 lands: **any change to one is a change to both.** Diff the pair before assuming otherwise.
 That is the entire argument for the deduplication PR, and it is worth more than the ~360
 lines it removes.
+
+## ClientHello size and the post-quantum key share
+
+Since iOS 26 / macOS 26 the platform TLS stack advertises the hybrid post-quantum group
+**`X25519MLKEM768`** in every TLS 1.3 ClientHello and sends a key share for it. Apple's
+advisory:
+
+> Devices … may fail to connect to some legacy servers due to an incorrect TLS
+> implementation that fails to read large `ClientHello` messages.
+> — <https://support.apple.com/en-us/122756>
+
+That share alone is 1216 bytes (a 1184-byte ML-KEM-768 encapsulation key,
+[FIPS 203](https://csrc.nist.gov/pubs/fips/203/final), plus a 32-byte X25519 share), so the
+hello is about 1.5 KB. An Ethernet path carries 1448 bytes per TCP segment once timestamps
+are on, so this hello is **split across two segments on every path**, not only on tunnelled
+ones; a smaller path MSS moves the split point and nothing else. A TLS 1.2-only hello from
+the same stack is about 200 bytes.
+
+Splitting is legal — TCP is a stream and the record carries its length — but two
+receiver-side defect classes are known to break on it:
+
+1. **Read-once TLS stacks.** A server or front end that issues one `read()` and assumes it
+   holds the whole hello. Chromium's rollout notes: *"the call to read() on the TCP socket
+   will not return the entire ClientHello in a single call. Not all implementations are
+   prepared for this"*.
+2. **Middleboxes** that parse the hello from the first data segment and drop or reset a
+   flow they cannot fully inspect (the breakage reported when Chrome enabled Kyber in 2024).
+
+Before blaming either, look at the packets. A handshake that hangs is the symptom of
+several unrelated things, this backend reports all of them identically (next section), and
+the one field case examined so far turned out to be a SYN proxy, with a 517-byte hello (the
+section after that).
+
+**What controls the hello from pjsip.** Only the version range. `param.proto` becomes
+`sec_protocol_options_set_min/max_tls_protocol_version` (`ssl_sock_apple.m:867-922`);
+without TLS 1.3 in the range there is no `key_share` at all. Two defaults exist and they
+differ:
+
+- Through pjsip's TLS transport the range is explicit whenever the setting was initialised
+  the usual way. `pjsip_tls_setting_default()` sets `PJSIP_SSL_DEFAULT_PROTO` — TLS 1.0, 1.1
+  and 1.2 — so a transport created from `pjsua_transport_config_default()` asks the OS for
+  min 1.0 / max 1.2 and never offers TLS 1.3 unless the application adds
+  `PJ_SSL_SOCK_PROTO_TLS1_3` to `tls_setting.proto` (a bit mask: adding it widens the
+  maximum, it does not select 1.3 alone).
+  (`tls_setting.method` is ignored whenever `proto` is non-zero — `ssl_get_proto()` in
+  `sip_transport_tls.c` — so setting only `method` changes nothing.)
+- The backend's own default, TLS 1.2 + 1.3, applies to `PJ_SSL_SOCK_PROTO_DEFAULT`
+  (`ssl_sock_apple.m:871-874`), which reaches it from code using `pj_ssl_sock` directly, or
+  from a zero-filled `pjsip_tls_setting` whose `method` is unset.
+
+This is the Apple backend. The Darwin backend discarding version bounds (#5234 in the
+defect table above) is a different matter.
+
+No finer knob exists. `param.curves` and `param.sigalgs` are never read by this backend,
+`param.ciphers` only appends ciphersuites, and socket options are ignored outright. The
+functions that would keep TLS 1.3 while dropping the post-quantum share —
+`sec_protocol_options_append_tls_key_exchange_group` and
+`sec_protocol_options_set_pqtls_mode` — are exported by `Security.framework` but declared in
+no public header (checked against `Security.tbd` and `SecProtocolOptions.h` of the
+iPhoneOS 27.2 SDK), so they are private API and not shippable.
+
+Refs: Apple <https://support.apple.com/en-us/122756> ·
+<https://support.apple.com/guide/security/tls-security-sec100a75d12/web> ·
+Chromium intent <https://groups.google.com/a/chromium.org/g/blink-dev/c/xb4JCKhED3k> ·
+<https://tldr.fail> (a vendor-facing write-up of the read-once defect).
+
+## Failures before the certificate all look like a handshake timeout
+
+For an outgoing connection this backend tells the application nothing until the server's
+certificate has arrived:
+
+- The `nw_connection` state handler posts the completion event only for
+  `nw_connection_state_ready`, or for an error that arrives while
+  `ssl_state == SSL_STATE_HANDSHAKING` (`ssl_sock_apple.m:1095-1161`).
+- `ssl_state` becomes `SSL_STATE_HANDSHAKING` in `ssock_on_connect_complete()`
+  (`ssl_sock_imp_common.c:1360`), and this backend reaches that function only from the
+  `sec_protocol` verify block (`ssl_sock_apple.m:967-990`) — that is, once there is a peer
+  certificate to verify.
+- An earlier error is passed to BSD `warn()`, which writes to stderr, not to the pjlib log.
+
+So a refused or unreachable TCP connect, a reset, a connection that is up but passes no
+data, and a lost ClientHello or ServerHello all surface the same way: `PJ_ETIMEDOUT` when
+`pj_ssl_sock_param.timeout` expires, and **never** if that timeout is zero. The
+socket-based backends report the OS error from `connect()` at once.
+
+The log does carry one bit. `Handshake failed on <local> in connecting to <remote>`
+(`ssl_sock_imp_common.c:410-426`) prints the local address, and for a client socket bound to
+the wildcard address — the normal pjsip case — it is filled in only by
+`ssock_on_connect_complete()`:
+
+| Logged local address | Meaning |
+|---|---|
+| `(unknown)` | the verify block never ran: no server certificate arrived (TCP or early-TLS failure of any kind) |
+| an address with an ephemeral port | the certificate arrived; the failure came later |
+
+Do not read a run of `SSL timeout after N s` lines on iOS as "the server was slow to answer
+the hello". It says only that the handshake was still unfinished after N seconds — the
+`(unknown)` vs ephemeral local address above is what says whether a certificate had arrived,
+and a `tcpdump`, or a plain TCP probe next to the TLS connection, is what tells the causes
+apart.
+
+Source reading confirmed by DeepWiki against upstream `d78f0ddc`:
+<https://deepwiki.com/search/three-questions-about-the-appl_71f63161-eea2-46a8-bbba-6e7363d3cbfd?mode=deep>.
+Not reported upstream yet.
+
+## A zero-window SYN-ACK from a SYN proxy
+
+One field case of "the TLS handshake hangs" turned out to be below TLS. A SYN proxy in front
+of the server answered some SYNs itself:
+
+```
+C > S  [S]   seq x                 <mss 1460, wscale 5, TS val a ecr 0, sackOK>
+S > C  [S.]  seq y ack x+1  win 0     <mss 1460, wscale 5, sackOK, TS val 11700 ecr 0>
+C > S  [.]   ack y+1
+S > C  [S.]  seq y ack x+1  win 2036  <mss 1380, sackOK, TS val 11700 ecr a', wscale 7>
+C > S  [.]   ack y+1
+             … nothing for 60 s, then one byte every 60 s …
+```
+
+The first SYN-ACK is the proxy's: window 0, the client's own MSS and window scale repeated
+back, `TSecr 0`. The second carries the real server's options and is meant to open the
+window. Apple's TCP answers a SYN in an established connection with a challenge ACK and
+drops it before window processing (xnu `tcp_input.c`, `case TCPS_ESTABLISHED`; RFC 5961 §4.2
+«Mitigation», <https://www.rfc-editor.org/rfc/rfc5961#section-4.2>), so the send window
+stays 0 and the ClientHello is never sent. The connection is up; nothing moves.
+
+What the application sees: `SSL timeout after N s` and
+`Handshake failed on (unknown) …` — the same as for every other failure before the
+certificate.
+
+Measured with a packet-level emulator replaying that exchange against macOS 27.2 (plain
+sockets and `NWConnection`, with and without TLS):
+
+- The first data byte is a zero-window probe after **60 s** or **5 s**. The 60 s come from
+  `TSecr 0`: with the connection's random timestamp offset subtracted it is no longer zero,
+  the stack takes "now − TSecr" as a round-trip sample capped at 60 s, and the persist timer
+  inherits it; which of the two a connection gets depends on the sign of its own first
+  TSval. With TSval echoed correctly (RFC 7323 §3.2 «Timestamps Option»,
+  <https://www.rfc-editor.org/rfc/rfc7323#section-3.2>) it is always 5 s. In the iOS captures
+  it was 60 s in all six connections that were observed long enough.
+- A plain ACK with a non-zero window instead of the second SYN-ACK: data flows at once.
+- TCP keepalive with a 1 s idle time: if the peer answers the keepalive with an ACK, the
+  window opens and the data goes out about 1.2 s after connect; if it stays silent, the
+  connection is dropped with `ETIMEDOUT` after about 4 s. What a real proxy does with a
+  keepalive was not observed.
+- `nw_tcp_options_set_persist_timeout` does not help: the limit is checked only when the
+  persist timer fires.
+
+This backend cannot use any of that: it applies no TCP options to its `nw_parameters`
+(`network_create_params()`: "Currently we ignore QoS and socket options").
+
+How to recognise it:
+
+- In a capture: `tcpdump -nn -r FILE 'tcp[tcpflags] & (tcp-syn|tcp-ack) == (tcp-syn|tcp-ack) and tcp[14:2] == 0'`
+  lists SYN-ACKs with window 0. A healthy server never sends one.
+- From the application, without a capture: connect a plain BSD socket to the same address
+  and read `TCP_CONNECTION_INFO` straight after `connect()`. An intercepted connection shows
+  `tcpi_snd_wnd == 0`, `tcpi_snd_wscale == tcpi_rcv_wscale` (the mirrored scale) and, for
+  about half of the connections, `tcpi_srtt` of 60000 ms.
+
