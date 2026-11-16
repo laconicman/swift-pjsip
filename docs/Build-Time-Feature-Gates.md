@@ -79,6 +79,14 @@ each tick and has no such invariant. `PJMEDIA_CONF_BACKEND` is therefore
 `PJMEDIA_CONF_SERIAL_BRIDGE_BACKEND` in `scripts/config_site-ios.h`, whose comment carries
 the line-level reasoning.
 
+Upstream fixed the defect in [pjproject#5377](https://github.com/pjsip/pjproject/pull/5377)
+(`ddf55c302`, 2026-11-05): the bridge now tracks mix state with its own tick counter
+(`last_tick`) instead of the clock timestamp, at all three sites — the assert, the
+multi-transmitter sum path, and `write_port()`'s heartbeat check — plus a `clock_restart_test`
+in `conf_test`. On a pjproject ≥ that commit the reachable instance of this assert is gone;
+re-evaluating the pin (unpin vs stay serial deliberately) is tracked in
+[Tech-Debt.md](./Tech-Debt.md) TD-1.
+
 ### `PJ_DEBUG` — assert policy moved to the consumer's log callback (since `0.7.0`)
 
 Not a feature gate, but a behaviour every consumer must know is baked in. Upstream defaults
