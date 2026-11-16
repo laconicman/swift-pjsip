@@ -403,8 +403,10 @@ the wildcard address — the normal pjsip case — it is filled in only by
 | an address with an ephemeral port | the certificate arrived; the failure came later |
 
 Do not read a run of `SSL timeout after N s` lines on iOS as "the server was slow to answer
-the hello". It says only that N seconds passed without a certificate; a `tcpdump`, or a
-plain TCP probe next to the TLS connection, is what tells the causes apart.
+the hello". It says only that the handshake was still unfinished after N seconds — the
+`(unknown)` vs ephemeral local address above is what says whether a certificate had arrived,
+and a `tcpdump`, or a plain TCP probe next to the TLS connection, is what tells the causes
+apart.
 
 Source reading confirmed by DeepWiki against upstream `d78f0ddc`:
 <https://deepwiki.com/search/three-questions-about-the-appl_71f63161-eea2-46a8-bbba-6e7363d3cbfd?mode=deep>.
