@@ -14,8 +14,8 @@
 #     present as defined symbols
 #   - disabled codecs (GSM, Speex) and the never-enabled ones (G.722.1, L16)
 #     absent
-#   - the 0.7.0 config/build changes: serial conference bridge
-#     (conference.o defines _pjmedia_conf_create), PJ_DEBUG 0 ('Assert failed:'
+#   - the config/build changes: parallel conference bridge
+#     (conf_thread.o defines _pjmedia_conf_create), PJ_DEBUG 0 ('Assert failed:'
 #     logging compiled in), DWARF sections in C objects (-g)
 # Plus header checks: module map shape, config_site.h constants, and
 # case-insensitive filename collisions (the macOS umbrella-clobbering bug).
@@ -269,16 +269,17 @@ verify_slice() {
         warn "PJSUA2 C++ symbols not found — PJSUA2 module would be empty"
     fi
 
-    # Serial conference bridge (PJMEDIA_CONF_SERIAL_BRIDGE_BACKEND, 0.7.0).
-    # conference.o and conf_thread.o are BOTH compiled every build — each
-    # self-gates on PJMEDIA_CONF_BACKEND, so the member that defines
-    # _pjmedia_conf_create names the backend that actually got built. 0.6.0,
-    # the parallel bridge: conf_thread.o.
+    # Parallel conference bridge — upstream's default since pjproject#5297
+    # (the 0.7.0 serial pin was dropped once #5377 fixed the conf_thread
+    # timestamp-restart assert). conference.o and conf_thread.o are BOTH
+    # compiled every build — each self-gates on PJMEDIA_CONF_BACKEND, so the
+    # member that defines _pjmedia_conf_create names the backend that
+    # actually got built. 0.7.0, the serial bridge: conference.o.
     if xcrun nm -A "$lib" 2>/dev/null \
-        | grep -E 'conference\.o: [0-9a-f]+ T _pjmedia_conf_create$' >/dev/null; then
-        pass "serial conference bridge (_pjmedia_conf_create defined in conference.o)"
+        | grep -E 'conf_thread\.o: [0-9a-f]+ T _pjmedia_conf_create$' >/dev/null; then
+        pass "parallel conference bridge (_pjmedia_conf_create defined in conf_thread.o)"
     else
-        fail "conference bridge is not the serial backend — expected _pjmedia_conf_create in conference.o"
+        fail "conference bridge is not the parallel backend — expected _pjmedia_conf_create in conf_thread.o"
     fi
 
     # PJ_DEBUG 0 (0.7.0): pj_assert logs instead of aborting, so the format
@@ -296,15 +297,16 @@ verify_slice() {
 
     # -g (0.7.0): pjproject objects must carry DWARF — the shipped archive had
     # none in its C objects through 0.6.0, so crash reports showed no
-    # file:line for pjproject frames. conference.o and sound_port.o are C
-    # members present in every build; ar -x is silent on a missing member, so
-    # existence is checked explicitly.
+    # file:line for pjproject frames. conf_thread.o (the parallel backend —
+    # conference.o is an empty TU under it and legitimately has no DWARF) and
+    # sound_port.o are C members present in every build; ar -x is silent on a
+    # missing member, so existence is checked explicitly.
     local dwarf_dir="$TMP/dwarf-$slice" dwarf_missing="" lib_abs
     mkdir -p "$dwarf_dir"
     lib_abs="$(cd "$(dirname "$lib")" && pwd)/$(basename "$lib")"
-    ( cd "$dwarf_dir" && ar -x "$lib_abs" conference.o sound_port.o ) 2>/dev/null || true
+    ( cd "$dwarf_dir" && ar -x "$lib_abs" conf_thread.o sound_port.o ) 2>/dev/null || true
     local member
-    for member in conference.o sound_port.o; do
+    for member in conf_thread.o sound_port.o; do
         if [[ ! -f "$dwarf_dir/$member" ]]; then
             dwarf_missing="$dwarf_missing $member(absent)"
         elif ! xcrun otool -l "$dwarf_dir/$member" 2>/dev/null \
