@@ -34,8 +34,8 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "PJSIP",
-            url: "https://github.com/laconicman/swift-pjsip/releases/download/0.7.0/PJSIP.xcframework-2.17.0-bf14c2e2c.zip",
-            checksum: "206e401fc630e9ab7ce4bb3075e3cdf05cea4cd3c6b580591a79c4b77b511547"
+            url: "https://github.com/laconicman/swift-pjsip/releases/download/0.8.0/PJSIP.xcframework-2.17.0-48290cd9b.zip",
+            checksum: "edc80dea1c5170c9c8fc6557f39a12ef72738162b5befcf109ad17cd231edff0"
         )
     ]
 )

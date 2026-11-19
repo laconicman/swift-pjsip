@@ -25,8 +25,10 @@ on (`PJMEDIA_HAS_VIDEO`, iOS video device, VideoToolbox codec), UDP/TCP/TLS tran
 Opus (`PJMEDIA_HAS_OPUS_CODEC`, since `0.4.0`), VPX (`PJMEDIA_HAS_VPX_CODEC` + the VP8/VP9
 sub-gates, since `0.5.0`),
 `PJMEDIA_RTP_PT_TELEPHONE_EVENTS 101`, CoreAudio advanced ducking, and `PJSIP_MAX_PKT_LEN 16000`.
-Since `0.7.0` it also pins `PJMEDIA_CONF_BACKEND` to the serial bridge and sets `PJ_DEBUG 0`
-(assert policy moved to the consumer's log callback — both below).
+Since `0.7.0` it also sets `PJ_DEBUG 0`
+(assert policy moved to the consumer's log callback — below). `0.7.0` additionally pinned
+`PJMEDIA_CONF_BACKEND` to the serial bridge; that pin was dropped in `0.8.0` once upstream
+carried the fix it waited on (next section).
 `PJSIP_DONT_SWITCH_TO_TCP` is **not** set — it used to be, and it disabled RFC 3261 §18.1.1 outright,
 so no authenticated call could be placed over UDP.
 
@@ -48,44 +50,41 @@ So the capacity block sets exactly two numbers and hands the rest back:
 The bare `#undef` matters because `pjsua.h` guards each of these with `#ifndef` — undoing the preset
 and stopping there inherits upstream's number, today's and tomorrow's.
 
-### The conference bridge: pinned back to the serial backend since `0.7.0`
+### The conference bridge: upstream's parallel default again since `0.8.0`
 
 From `0.3.0` the artifact mixed audio in `conf_thread.c`, not `conference.c`.
 [pjproject#5297](https://github.com/pjsip/pjproject/pull/5297) made the parallel bridge the default
 backend wherever there are threads. On iOS, `PJMEDIA_CONF_THREADS` defaults to 1, so pjsua asks
 for no worker threads and the bridge runs non-parallel: mixing stays in the sound device's
-`get_frame()` thread, and the new `pjsua_media_config.conf_thread_prio` (applied to worker threads
+`get_frame()` thread, and the `pjsua_media_config.conf_thread_prio` (applied to worker threads
 only) has nothing to act on.
 
-What an application can observe is timing, in two places — both of which **flip back** under the
-pin, since they were the parallel bridge's changes:
+What an application can observe is timing, in two places:
 
-- The parallel bridge applied queued connect, disconnect and remove operations after the tick's
-  mix rather than before it; the serial bridge applies them before it again (the 0.2.1 order), so
-  a mute (a disconnect from slot 0) takes effect one 20 ms frame earlier than on `0.3.0`–`0.6.0`.
-- On the parallel bridge a hangup's BYE went out before the call's port had left the bridge; under
-  the serial bridge it goes out after, as on 0.2.1.
+- The parallel bridge applies queued connect, disconnect and remove operations after the tick's
+  mix rather than before it, so a mute (a disconnect from slot 0) takes effect one 20 ms frame
+  later than the serial order.
+- On the parallel bridge a hangup's BYE goes out before the call's port has left the bridge.
 
-The pin exists because the parallel bridge holds an invariant the serial one never needed —
-`mix_and_transmit()` asserts a listener fed by a single transmitter sees a new timestamp every
-tick (`conf_thread.c` `pj_assert(listener->transmitter_cnt == 1 && listener->last_timestamp.u64
-!= timestamp->u64)`). That is reachable from legal pjsua use: every sound-device (re)open —
+`0.7.0` pinned `PJMEDIA_CONF_BACKEND` to `PJMEDIA_CONF_SERIAL_BRIDGE_BACKEND` because the
+parallel bridge held an invariant the serial one never needed — `mix_and_transmit()` asserted a
+listener fed by a single transmitter sees a new timestamp every tick
+(`conf_thread.c` `pj_assert(listener->transmitter_cnt == 1 && listener->last_timestamp.u64
+!= timestamp->u64)`). That was reachable from legal pjsua use: every sound-device (re)open —
 `pjsua_set_null_snd_dev()` always, `pjsua_set_snd_dev()` whenever it actually (re)opens a
 device — creates a new `pjmedia_clock` whose timestamp restarts at 0 while
 `conf_port->last_timestamp` persists, so a port not mixed for the few ticks around a reopen
 meets its own old timestamp. With asserts on it aborted a consumer build seconds into a call;
 `conference.c` clears the mix buffer of every listener that has a transmitter at the top of
-each tick and has no such invariant. `PJMEDIA_CONF_BACKEND` is therefore
-`PJMEDIA_CONF_SERIAL_BRIDGE_BACKEND` in `scripts/config_site-ios.h`, whose comment carries
-the line-level reasoning.
+each tick and has no such invariant.
 
 Upstream fixed the defect in [pjproject#5377](https://github.com/pjsip/pjproject/pull/5377)
 (`ddf55c302`, 2026-11-05): the bridge now tracks mix state with its own tick counter
 (`last_tick`) instead of the clock timestamp, at all three sites — the assert, the
 multi-transmitter sum path, and `write_port()`'s heartbeat check — plus a `clock_restart_test`
-in `conf_test`. On a pjproject ≥ that commit the reachable instance of this assert is gone;
-re-evaluating the pin (unpin vs stay serial deliberately) is tracked in
-[Tech-Debt.md](./Tech-Debt.md) TD-1.
+in `conf_test`. `0.8.0` vendors `48290cd9`, which carries the fix, so the pin is dropped and
+the artifact is back on upstream's default — the parallel semantics it ran `0.3.0`–`0.6.0`.
+The full pin analysis lives in [Tech-Debt.md](./Tech-Debt.md) TD-1.
 
 ### `PJ_DEBUG` — assert policy moved to the consumer's log callback (since `0.7.0`)
 

@@ -17,7 +17,7 @@
  * here for a year silently breaking every authenticated call over UDP.
  * A comment that names the tradeoff would have caught it.
  *
- * Line references are pjproject master @ bf14c2e2c (2026-10-29). Each one
+ * Line references are pjproject master @ 48290cd9 (2026-11-19). Each one
  * carries the `token` that must sit at that line; scripts/check-cites.sh
  * verifies them against the tree build.sh is about to compile, so the line
  * above is checked on every download rather than claimed by the last edit.
@@ -56,14 +56,14 @@
  * ------------------------------------------------------------------------- */
 
 /* Accounts: whatever upstream defaults to — 8 as of 2.17/master,
- * pjsua-lib/pjsua.h:4079 `define PJSUA_MAX_ACC`; the preset cuts it to 4.
+ * pjsua-lib/pjsua.h:4132 `define PJSUA_MAX_ACC`; the preset cuts it to 4.
  *
  * WHY: 4 is the whole account table, so the live SIP test suite could not add
  * a second provider pair without retiring an existing one. Upstream's own
  * default is already enough — the preset is the only thing in the way.
  *
  * COST: pjsua_var.acc[] is a FIXED array inside the pjsua_data singleton
- * (pjsua_internal.h:678 `acc[PJSUA_MAX_ACC]`) and init_data() walks all of
+ * (pjsua_internal.h:682 `acc[PJSUA_MAX_ACC]`) and init_data() walks all of
  * it at startup, so four extra pjsua_acc entries are paid unconditionally,
  * even with one account configured. Measured against this build:
  * sizeof(pjsua_acc) = 7168 B, so +4 accounts = +28 KB, and sizeof(pjsua_data)
@@ -72,7 +72,7 @@
 #undef  PJSUA_MAX_ACC
 
 /* 8 simultaneous calls (the preset AND upstream both say 4 —
- * pjsua-lib/pjsua.h:6076 `define PJSUA_MAX_CALLS` — so this is a departure
+ * pjsua-lib/pjsua.h:6154 `define PJSUA_MAX_CALLS` — so this is a departure
  * from upstream, not a restoration, and the only literal in this section).
  *
  * WHY: 4 is genuinely insufficient, which is what earns the override — the
@@ -83,7 +83,7 @@
  *
  * COST: unlike PJSUA_MAX_ACC this is only a ceiling — pjsua_var.calls is
  * pool-allocated at pjsua_init() to ua_cfg.max_calls
- * (pjsua_call.c:245-250 `sizeof(pjsua_call) *`), which pjsua_config_default()
+ * (pjsua_call.c:264-266 `sizeof(pjsua_call) *`), which pjsua_config_default()
  * sets to this macro (pjsua_core.c:115 `cfg->max_calls = PJSUA_MAX_CALLS`).
  * Measured sizeof(pjsua_call) = 22328 B, so leaving the default costs
  * +87 KB. An app that wants the old footprint can lower max_calls at runtime;
@@ -93,7 +93,7 @@
 #define PJSUA_MAX_CALLS 8
 
 /* Conference slots: whatever upstream defaults to — 254 as of 2.17/master,
- * pjsua-lib/pjsua.h:8261 `define PJSUA_MAX_CONF_PORTS`.
+ * pjsua-lib/pjsua.h:8379 `define PJSUA_MAX_CONF_PORTS`.
  *
  * WHY: this — not PJSUA_MAX_CALLS — is the real ceiling on a locally mixed
  * conference. The preset replaces it with (PJSUA_MAX_CALLS + 2*PJSUA_MAX_PLAYERS),
@@ -280,46 +280,17 @@
  * swift-pjsua/docs/Call-Termination-Paths.md §4.1 — changing it at build time
  * silently moves a number other documents quote. */
 
-/* The conference bridge pinned to the SERIAL backend (conference.c), not
- * upstream's new default — the parallel bridge (conf_thread.c) that
- * pjproject#5297 made the default wherever PJ_HAS_THREADS
- * (pjmedia/config.h:156-164 `ifndef PJMEDIA_CONF_BACKEND`), and which this
- * artifact ran since 0.3.0.
+/* PJMEDIA_CONF_BACKEND stays at upstream's default: the parallel
+ * conf_thread.c bridge that pjproject#5297 made the default wherever
+ * PJ_HAS_THREADS (pjmedia/config.h `ifndef PJMEDIA_CONF_BACKEND`).
  *
- * WHY: the parallel bridge holds an invariant the serial one never needed —
- * mix_and_transmit() asserts that a listener fed by a single transmitter sees
- * a NEW timestamp every tick
- * (conf_thread.c:4507 `pj_assert(listener->transmitter_cnt == 1`), and that
- * invariant is reachable from legal pjsua use. Every sound-device (re)open —
- * pjsua_set_null_snd_dev() always, pjsua_set_snd_dev() whenever it actually
- * (re)opens a device (an already-open device returns early:
- * pjsua_aud.c:2550-2560 `No changes in capture and playback devices`) —
- * creates a new pjmedia_clock whose timestamp restarts at 0
- * (clock_thread.c:246 `clock->timestamp.u64 = 0`), while
- * conf_port->last_timestamp persists across the reopen, so a listener that
- * was not mixed for the few ticks around it meets its own old timestamp
- * again and the assert fires. With pj_assert == abort() (see PJ_DEBUG below)
- * that killed a consumer build seconds into a call, on 2026-11-02.
- * conference.c has no such invariant: it clears the mix buffer of every
- * listener that has a transmitter at the top of each tick
- * (conference.c:3304 `pj_bzero(conf_port->mix_buf`), so a repeated timestamp
- * is unremarkable.
- *
- * COST: a backend upstream no longer defaults to, so less exercised there.
- * Op-queue timing reverts to the pre-0.3.0 behaviour:
- * connect/disconnect/remove are applied BEFORE the tick's mix
- * (conference.c:3269-3273 `handle_op_queue(conf)` in get_frame) instead of
- * after it (conf_thread.c:3932-3936 `handle_op_queue(conf)`), so they take
- * effect one 20 ms frame earlier and a hangup's BYE leaves after the call's
- * port has left the bridge again — the teardown-ordering change described
- * here in 0.3.0 flips back.
- *
- * PJMEDIA_CONF_THREADS stays at its default: it sizes only the parallel
- * backend's worker pool
- * (pjmedia/config.h:178-187 `ifndef PJMEDIA_CONF_THREADS`)
- * and conference.c never reads it.
- */
-#define PJMEDIA_CONF_BACKEND PJMEDIA_CONF_SERIAL_BRIDGE_BACKEND
+ * 0.7.0 pinned the serial bridge (conference.c) because the parallel
+ * bridge's mix_and_transmit() asserted a fresh timestamp per tick — an
+ * invariant reachable from legal pjsua use when a sound-device reopen
+ * restarts the clock at 0 (docs/Tech-Debt.md TD-1 has the full analysis).
+ * Upstream fixed the assert in pjproject#5377 (ddf55c302), vendored
+ * since 48290cd9, so the pin is dropped: op-queue and BYE ordering
+ * return to the parallel semantics the artifact ran 0.3.0–0.6.0. */
 
 /* Assert policy moved from abort() to the log. Upstream defaults PJ_DEBUG to
  * !NDEBUG (pj/config.h:379-385 `ifndef PJ_DEBUG`) and this build defines no

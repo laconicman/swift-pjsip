@@ -317,9 +317,9 @@ chosen by `ls | sort | tail -1`, which is **lexicographic** (`iPhoneOS9.3` sorts
 `iPhoneOS10.0`); `RANLIB` is stubbed to `echo ranlib`; and each run configures exactly one
 `-arch`, so multi-arch means multiple configure+make passes.
 
-### 12. Assert policy is the consumer's — `PJ_DEBUG 0`, and the serial conference bridge
+### 12. Assert policy is the consumer's — `PJ_DEBUG 0`
 
-Two 0.7.0 changes share one incident: a consumer's TestFlight build aborted in
+`0.7.0` shipped two changes out of one incident: a consumer's TestFlight build aborted in
 `conf_thread.c` `mix_and_transmit()` on
 `pj_assert(listener->transmitter_cnt == 1 && listener->last_timestamp.u64 != timestamp->u64)`
 seconds into a call, on a legal pjsua sequence. The parallel bridge — upstream's
@@ -334,13 +334,15 @@ timestamp and trips the assert. The serial bridge in `conference.c` holds no
 such invariant — it clears the mix buffer of every listener that has a
 transmitter at the top of each tick.
 
-- **The bridge is pinned back to `conference.c`.** `config_site-ios.h` defines
-  `PJMEDIA_CONF_BACKEND` as `PJMEDIA_CONF_SERIAL_BRIDGE_BACKEND`. Cost: a
-  backend upstream no longer defaults to, and op-queue timing reverts to the
-  pre-#5297 order — connect/disconnect/remove applied *before* the tick's mix
-  instead of after, so the teardown-ordering note `0.3.0` carried flips back.
-  The verifier asserts the backend from the binary: `_pjmedia_conf_create` must
-  come from `conference.o` (both files compile; each self-gates on the macro).
+- **The bridge pin was `0.7.0`-only.** `config_site-ios.h` defined
+  `PJMEDIA_CONF_BACKEND` as `PJMEDIA_CONF_SERIAL_BRIDGE_BACKEND` until
+  `0.8.0`, which vendors pjproject `48290cd9` carrying
+  [pjproject#5377](https://github.com/pjsip/pjproject/pull/5377) — the
+  bridge-owned `last_tick` counter that removed the reachable assert. The
+  artifact is back on upstream's parallel default, with the `0.3.0`–`0.6.0`
+  op-queue/BYE ordering. The verifier asserts the backend from the binary:
+  `_pjmedia_conf_create` must come from `conf_thread.o` (both files compile;
+  each self-gates on the macro).
 - **Asserts log instead of aborting.** `PJ_DEBUG 0` turns `pj_assert` into a
   level-1 `PJ_LOG(1, (__FILE__, "Assert failed: %s", #expr))` emitted
   synchronously from the asserting frame, on PJLIB-registered threads. The
@@ -502,6 +504,7 @@ below reintroduces the corresponding defect in every consumer, silently.
 | 2025-08 | [#5076](https://github.com/pjsip/pjproject/pull/5076) | Oversized requests silently fall back to UDP and fragment when the RFC 3261 §18.1.1 TCP upgrade has no TCP transport to acquire — now at least logged |
 | 2026-10 | [#5313](https://github.com/pjsip/pjproject/pull/5313) `70ee4eb2a` | **A configured `+sip.instance` is sent without SIP outbound too.** Before it, an application's instance ID went out only with `reg-id` on TCP/TLS, and a registrar that did not confirm outbound saw it disappear after the first REGISTER, so a phone could not keep one Contact from the first REGISTER to the un-REGISTER. swift-pjsua's account-level instance ID depends on it |
 | 2026-10 | [#5281](https://github.com/pjsip/pjproject/pull/5281) `87d1f8a74` | The registration Contact is updated when the registrar does not confirm outbound. Without it the registration session kept sending the first REGISTER's outbound Contact although pjsua's own state said outbound was not in use |
+| 2026-11 | [#5377](https://github.com/pjsip/pjproject/pull/5377) `ddf55c302` | **The parallel conference bridge's timestamp-restart assert is fixed.** `0.7.0` pinned `PJMEDIA_CONF_BACKEND` to the serial bridge to dodge it; `0.8.0` dropped the pin, so a release cut from a tree older than this reintroduces the `mix_and_transmit()` assert that aborted a consumer seconds into a call — unless the serial pin is deliberately re-added |
 
 Record the source commit in `RELEASE-NOTES.md` at build time; a tag alone does not say which
 pjproject tree produced it. The running scan of what has changed upstream since the shipped binary,
