@@ -1,7 +1,14 @@
 diff --git a/pjmedia/src/pjmedia-codec/vpx.c b/pjmedia/src/pjmedia-codec/vpx.c
-index 5579eb812..d02b94873 100644
+index 5579eb812..29cd184ac 100644
 --- a/pjmedia/src/pjmedia-codec/vpx.c
 +++ b/pjmedia/src/pjmedia-codec/vpx.c
+@@ -1,5 +1,5 @@
+ /* 
+- * Copyright (C)2019 Teluu Inc. (http://www.teluu.com)
++ * Copyright (C)2019-2026 Teluu Inc. (http://www.teluu.com)
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published by
 @@ -57,6 +57,8 @@
  
  #define MAX_RX_RES              1200
@@ -75,30 +82,29 @@ index 5579eb812..d02b94873 100644
              }
  
              packet_size -= desc_len;
-@@ -757,6 +777,9 @@ static pj_status_t vpx_codec_decode_(pjmedia_vid_codec *codec,
+@@ -756,7 +776,10 @@ static pj_status_t vpx_codec_decode_(pjmedia_vid_codec *codec,
+         }
      }
  
-     /* Decode */
-+    if (whole_len == 0)
+-    /* Decode */
++    /* Decode. Damaged input is skipped; a keyframe is requested below. */
++    if (whole_len == 0 || input_lost)
 +        goto on_return;
 +
      res = vpx_codec_decode(&vpx_data->dec, vpx_data->dec_buf, whole_len,
                             0, VPX_DL_REALTIME);
      if (res) {
-@@ -821,7 +844,11 @@ static pj_status_t vpx_codec_decode_(pjmedia_vid_codec *codec,
+@@ -821,7 +844,8 @@ static pj_status_t vpx_codec_decode_(pjmedia_vid_codec *codec,
      output->size = pos;
          
  on_return:
 -    if (!has_frame) {
-+    /* A lost or malformed payload can still yield a decoded picture (e.g.
-+     * VP9 frame-parallel partitions), and that picture is corrupt — request
-+     * a keyframe for damaged input even when libvpx produced a frame.
-+     */
-+    if (!kf_requested && (!has_frame || input_lost)) {
++    /* Request a keyframe when decoding produced no picture. */
++    if (!kf_requested && !has_frame) {
          pjmedia_event event;
  
          /* Broadcast missing keyframe event */
-@@ -829,7 +856,10 @@ on_return:
+@@ -829,7 +853,10 @@ on_return:
                             &packets[0].timestamp, codec);
          pjmedia_event_publish(NULL, codec, &event,
                                PJMEDIA_EVENT_PUBLISH_DEFAULT);

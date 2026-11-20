@@ -23,9 +23,10 @@ retire them here once it merges; the reverse dry-run makes that a no-op):
   libvpx runs, treats an empty reassembly as a missing keyframe, and throttles
   `PJMEDIA_EVENT_KEYFRAME_MISSING` to ~1/sec using the OpenH264 decoder's
   `missing_kf_interval` pattern (`b1e2983f`). Damaged input (`input_lost`:
-  unpacketize failure or a zero-size jitter-buffer gap) publishes the event
-  even when libvpx still returns a picture — a partial frame can decode
-  "successfully" while corrupt. Without it, jitter-buffer gaps
+  unpacketize failure or a zero-size jitter-buffer gap) skips
+  `vpx_codec_decode()` entirely — like OpenH264 discarding its output on
+  `dsRefLost`/`dsDepLayerLost`, a partially reassembled frame would only
+  yield a corrupt picture. Without it, jitter-buffer gaps
   (size=0, `buf=NULL`) hit `PJ_ETOOSMALL`, returned early, and skipped the
   keyframe-request path entirely — any loss silently dropped frames with no
   PLI/SIP-INFO recovery, while surviving failures each scheduled 2 PLIs.

@@ -1,7 +1,14 @@
 diff --git a/pjmedia/src/pjmedia-codec/vpx_packetizer.c b/pjmedia/src/pjmedia-codec/vpx_packetizer.c
-index cf7cd8118..d2c42e770 100644
+index cf7cd8118..7a9ef6b67 100644
 --- a/pjmedia/src/pjmedia-codec/vpx_packetizer.c
 +++ b/pjmedia/src/pjmedia-codec/vpx_packetizer.c
+@@ -1,5 +1,5 @@
+ /* 
+- * Copyright (C) 2020 Teluu Inc. (http://www.teluu.com)
++ * Copyright (C) 2020-2026 Teluu Inc. (http://www.teluu.com)
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published by
 @@ -117,8 +117,7 @@ PJ_DEF(pj_status_t) pjmedia_vpx_packetize(const pjmedia_vpx_packetizer *pktz,
          bits[2] = ((pktz->picture_id & 0x7f00) >> 8) | 0x80;
          bits[3] = pktz->picture_id & 0xff;
