@@ -14,26 +14,15 @@ mode this directory exists to prevent is a rebuild silently dropping a fix upstr
   below.
 - `historical/` is **not** applied. It holds patches kept for provenance only.
 
-Two patches are applied today, both from
-[pjproject#5419](https://github.com/pjsip/pjproject/pull/5419) (open upstream —
-retire them here once it merges; the reverse dry-run makes that a no-op):
-
-- `vpx-decode-survive-packet-loss.patch` — `vpx_codec_decode_()` skips an
-  un-unpacketizable RTP payload instead of failing the whole frame before
-  libvpx runs, treats an empty reassembly as a missing keyframe, and throttles
-  `PJMEDIA_EVENT_KEYFRAME_MISSING` to ~1/sec using the OpenH264 decoder's
-  `missing_kf_interval` pattern (`b1e2983f`). Damaged input (`input_lost`:
-  unpacketize failure or a zero-size jitter-buffer gap) publishes the event
-  even when libvpx still returns a picture — a partial frame can decode
-  "successfully" while corrupt. Without it, jitter-buffer gaps
-  (size=0, `buf=NULL`) hit `PJ_ETOOSMALL`, returned early, and skipped the
-  keyframe-request path entirely — any loss silently dropped frames with no
-  PLI/SIP-INFO recovery, while surviving failures each scheduled 2 PLIs.
-- `vpx-vp8-clear-nonref-bit.patch` — stops setting the VP8 payload descriptor
-  N (non-reference) bit on non-keyframes. libvpx does not report reference
-  status and RFC 7741 says the bit SHOULD be 0 when it is unknown; receivers
-  doing reference-aware frame dropping could otherwise discard frames that
-  future frames depend on.
+No patches are applied today. The VPX packet-loss recovery and the VP8
+N-bit fix ([pjproject#5419](https://github.com/pjsip/pjproject/pull/5419),
+still open upstream) ship **in the pinned source itself**: `0.9.0` builds
+`laconicman/pjproject@e675aef5e` — upstream master `48290cd9b` plus the PR
+head — fetched via `PJSIP_GH_REPO=laconicman/pjproject` +
+`--pjsip-source commit=…`, so the tree arrives already fixed and the patch
+step is a no-op. Once #5419 merges upstream, the pin returns to
+`pjsip/pjproject` master and this directory stays empty; the reverse
+dry-run would make stale patch files harmless anyway.
 
 ## Retired: `iphone17-darwin-dev-stride.patch`
 
