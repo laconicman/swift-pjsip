@@ -17,7 +17,8 @@
  * here for a year silently breaking every authenticated call over UDP.
  * A comment that names the tradeoff would have caught it.
  *
- * Line references are pjproject master @ 48290cd9 (2026-11-19). Each one
+ * Line references are pjproject @ e675aef5e (laconicman/pjproject —
+ * upstream master 48290cd9b plus pjsip/pjproject#5419; 2026-11-20). Each one
  * carries the `token` that must sit at that line; scripts/check-cites.sh
  * verifies them against the tree build.sh is about to compile, so the line
  * above is checked on every download rather than claimed by the last edit.

@@ -23,7 +23,7 @@ META_DIR="${BUILD_ROOT}/meta"
 OUTPUT_DIR="${BUILD_ROOT}/output"
 
 # Upstream coordinates.
-PJSIP_GH_REPO="pjsip/pjproject"
+PJSIP_GH_REPO="${PJSIP_GH_REPO:-pjsip/pjproject}"
 BCG729_GH_REPO="BelledonneCommunications/bcg729"
 OPUS_GH_REPO="xiph/opus"
 VPX_GH_REPO="webmproject/libvpx"
